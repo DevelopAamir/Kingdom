@@ -28,230 +28,229 @@ scene.add(dirLight);
 const grid = new THREE.GridHelper(100, 100);
 scene.add(grid);
 
-// --- GUN CREATION (Mirrored from game.js) ---
-function createGun() {
-    const gunGroup = new THREE.Group();
+// DEBUG CUBE (Verify Scene is Rendering)
+const debugCube = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.5, 0.5),
+    new THREE.MeshBasicMaterial({ color: 0xff0000 }) // Red
+);
+debugCube.position.set(2, 1, 0);
+scene.add(debugCube);
 
-    // Low Poly AK47 Procedural
-    const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-    const woodMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-
-    // 1. Stock (Wood)
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.4), woodMaterial);
-    stock.position.set(0, -0.05, -0.3);
-    gunGroup.add(stock);
-
-    // 2. Main Body (Metal)
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.4), darkMaterial);
-    body.position.set(0, 0, 0.1);
-    gunGroup.add(body);
-
-    // 3. Magazine (Metal)
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.15), darkMaterial);
-    mag.position.set(0, -0.2, 0.15);
-    mag.rotation.x = 0.2;
-    gunGroup.add(mag);
-
-    // 4. Barrel (Metal)
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.6), darkMaterial);
-    barrel.position.set(0, 0, 0.6);
-    gunGroup.add(barrel);
-
-    // 5. Handguard (Wood)
-    const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.3), woodMaterial);
-    handguard.position.set(0, -0.02, 0.4);
-    gunGroup.add(handguard);
-
-    // Muzzle Point
-    const muzzle = new THREE.Object3D();
-    muzzle.position.set(0, 0, 0.9);
-    gunGroup.add(muzzle);
-
-    return { group: gunGroup, muzzle: muzzle };
-}
-
-// Global Vars for GUI
-let armyGun = null;
-let gunBodyMat = null;
-let gunWoodMat = null;
-
-// Bones
-let rightArmBone = null;
-let rightForeArmBone = null;
-let leftArmBone = null;
-let leftForeArmBone = null;
-let spineBone = null;
-
-let guiParams = {
-    // Gun Transform
-    x: -5,
-    y: -5,
-    z: 5,
-
-    rx: -261,
-    ry: -198,
-    rz: 1,
-
-    scale: 76.0,
-
-    // Right Arm (Aiming)
-    rArmX: 0.84,
-    rArmY: 0.43,
-    rArmZ: 0.57,
-
-    // Right Forearm
-    rForeArmX: 1,
-    rForeArmY: 1,
-    rForeArmZ: 0,
-
-    // Left Arm (Reaching for Barrel)
-    lArmX: -0.55,
-    lArmY: -0.96,
-    lArmZ: -5.5,
-
-    // Left Forearm (Bent to hold foregrip)
-    lForeArmX: 0.15,
-    lForeArmY: -0.4,
-    lForeArmZ: -4.9,
-
-    // Spine (Twist to align shoulders)
-    spineX: 0,
-    spineY: 0.4,
-
-    // Animations
-    anim: 'Idle',
-
-    // Colors
-    gunBody: '#333333',
-    gunWood: '#8B4513',
-    uniform: '#5555ff', // Default blue-ish
-
-    // Model Selection
-    model: 'Soldier'
-};
-
-const loader = new THREE.GLTFLoader();
-
+// --- CONFIG & ASSETS ---
 const MODELS = {
     'Soldier': 'https://threejs.org/examples/models/gltf/Soldier.glb',
     'Adventurer': './glb/Adventurer.glb',
     'Punk': './glb/Punk.glb'
 };
 
-let mixer = null;
-let actions = {};
-let soldierMesh = null;
+const GUNS = {
+    'MPSD': 'guns/Mpsd.glb',
+    'Sniper': 'guns/Sniper Rifle.glb'
+};
 
-// Initial Load
-// initGUI(); // Moved to inside loadSelectModel callback
-loadSelectModel('Soldier');
+// --- STATE ---
+let characterMesh;
+let currentGunMesh;
+let mixer, actions = {};
+let bones = {
+    RightHand: null,
+    RightArm: null,
+    RightForeArm: null,
+    Spine: null
+};
 
-function loadSelectModel(key) {
-    if (soldierMesh) {
-        scene.remove(soldierMesh);
-        soldierMesh = null;
+// GUI Parameters
+let guiParams = {
+    // Character
+    model: 'Soldier',
+    anim: 'Idle',
+
+    // Gun Config
+    gunType: 'MPSD',
+    parent: 'RightHand', // RightHand, Spine, Scene
+
+    // Gun Transform (Local)
+    gx: 0, gy: 0, gz: 0,
+    grx: 0, gry: 0, grz: 0,
+    scale: 1.5,
+
+    // Bone Overrides
+    // Right Arm
+    rArmX: 0, rArmY: 0, rArmZ: 0,
+    rForeArmX: 0, rForeArmY: 0, rForeArmZ: 0,
+    // Hand
+    rHandX: 0, rHandY: 0, rHandZ: 0,
+
+    // Spine
+    spineX: 0, spineY: 0, spineZ: 0,
+
+    // Actions
+    logValues: () => {
+        const msg = `
+GUN TRANSFORM (${guiParams.parent}):
+Position: ${guiParams.gx.toFixed(3)}, ${guiParams.gy.toFixed(3)}, ${guiParams.gz.toFixed(3)}
+Rotation: ${guiParams.grx.toFixed(1)}, ${guiParams.gry.toFixed(1)}, ${guiParams.grz.toFixed(1)}
+Scale: ${guiParams.scale}
+
+BONE ROTATIONS:
+RightArm: ${guiParams.rArmX.toFixed(2)}, ${guiParams.rArmY.toFixed(2)}, ${guiParams.rArmZ.toFixed(2)}
+RightForeArm: ${guiParams.rForeArmX.toFixed(2)}, ${guiParams.rForeArmY.toFixed(2)}, ${guiParams.rForeArmZ.toFixed(2)}
+RightHand: ${guiParams.rHandX.toFixed(2)}, ${guiParams.rHandY.toFixed(2)}, ${guiParams.rHandZ.toFixed(2)}
+Spine: ${guiParams.spineX.toFixed(2)}, ${guiParams.spineY.toFixed(2)}, ${guiParams.spineZ.toFixed(2)}
+        `;
+        console.log(msg);
+        alert("Values logged to Console (Cmd+Option+J to view)");
     }
-    // Remove skeleton helper if exists (it's added to scene directly in current code)
-    // We should track it to remove it. For now, let's just clear scene helpers? 
-    // Actually safe way:
-    scene.children.forEach(c => {
-        if (c.type === 'SkeletonHelper') scene.remove(c);
-    });
+};
 
-    const url = MODELS[key];
-    console.log(`LOADING MODEL: ${key} from ${url}`);
+const loader = new THREE.GLTFLoader();
 
-    loader.load(url, (gltf) => {
-        const model = gltf.scene;
-        soldierMesh = model;
-        scene.add(model);
+// --- INITIALIZATION ---
+function init() {
+    initGUI();
+    loadCharacter();
+}
 
-        model.traverse(o => {
-            if (o.isMesh) {
-                o.castShadow = true;
-                if (o.material) o.material = o.material.clone();
-            }
-        });
+function initGUI() {
+    const gui = new dat.GUI({ width: 300 });
 
-        // Log Bones and Animations for Analysis
-        console.log("--- BONE LIST ---");
-        model.traverse(c => {
-            if (c.isBone) console.log(c.name);
-        });
+    // Model
+    gui.add(guiParams, 'model', Object.keys(MODELS)).onChange(loadCharacter);
+    gui.add(guiParams, 'anim', ['Idle']).onChange(playAnim).listen(); // Updated dynamically
 
-        console.log("--- ANIMATIONS ---");
-        gltf.animations.forEach(a => console.log(a.name));
+    // Gun
+    const fGun = gui.addFolder('Weapon Config');
+    fGun.add(guiParams, 'gunType', Object.keys(GUNS)).onChange(loadGun);
+    fGun.add(guiParams, 'parent', ['RightHand', 'Spine', 'Scene']).onChange(updateGunParent);
+    fGun.open();
 
-        updateUniformColor();
+    // Gun Transform
+    const fTrans = gui.addFolder('Weapon Transform (Local)');
+    fTrans.add(guiParams, 'gx', -2, 2, 0.01);
+    fTrans.add(guiParams, 'gy', -2, 2, 0.01);
+    fTrans.add(guiParams, 'gz', -2, 2, 0.01);
+    fTrans.add(guiParams, 'grx', -360, 360).name('Rot X (Deg)');
+    fTrans.add(guiParams, 'gry', -360, 360).name('Rot Y (Deg)');
+    fTrans.add(guiParams, 'grz', -360, 360).name('Rot Z (Deg)');
+    fTrans.add(guiParams, 'scale', 0.1, 5);
+    fTrans.open();
 
-        // Skeleton Helper
-        const skeleton = new THREE.SkeletonHelper(model);
-        scene.add(skeleton);
+    // Bones
+    const fBones = gui.addFolder('Bone Rotations');
+    fBones.add(guiParams, 'rArmX', -3.2, 3.2, 0.01).name('R.Arm X');
+    fBones.add(guiParams, 'rArmY', -3.2, 3.2, 0.01).name('R.Arm Y');
+    fBones.add(guiParams, 'rArmZ', -3.2, 3.2, 0.01).name('R.Arm Z');
+    fBones.add(guiParams, 'rForeArmX', -3.2, 3.2, 0.01).name('R.ForeArm X');
+    fBones.add(guiParams, 'rForeArmY', -3.2, 3.2, 0.01).name('R.ForeArm Y');
+    fBones.add(guiParams, 'rForeArmZ', -3.2, 3.2, 0.01).name('R.ForeArm Z');
+    fBones.add(guiParams, 'rHandX', -3.2, 3.2, 0.01).name('R.Hand X');
+    fBones.add(guiParams, 'rHandY', -3.2, 3.2, 0.01).name('R.Hand Y');
+    fBones.add(guiParams, 'rHandZ', -3.2, 3.2, 0.01).name('R.Hand Z');
+    fBones.open();
 
-        // Animations
-        mixer = new THREE.AnimationMixer(model);
-        // Clear previous actions
-        // Populate ALL Actions
-        actions = {};
-        const animNames = [];
-        gltf.animations.forEach(a => {
-            actions[a.name] = mixer.clipAction(a);
-            animNames.push(a.name);
-        });
+    gui.add(guiParams, 'logValues').name('LOG VALUES');
+}
 
-        // Play first animation by default
-        if (animNames.length > 0) {
-            guiParams.anim = animNames[0];
+// --- LOADING ---
+function loadCharacter() {
+    if (characterMesh) {
+        scene.remove(characterMesh);
+        characterMesh = null;
+    }
+
+    // Remove helpers
+    scene.children.filter(c => c.type === 'SkeletonHelper').forEach(s => scene.remove(s));
+
+    console.log(`LOADING MODEL: ${guiParams.model} from ${MODELS[guiParams.model]}`);
+
+    loader.load(
+        MODELS[guiParams.model],
+        (gltf) => {
+            console.log("Model Loaded Successfully!");
+            const model = gltf.scene;
+            characterMesh = model;
+            scene.add(model);
+
+            model.traverse(o => {
+                if (o.isMesh) {
+                    o.castShadow = true;
+                    if (o.material) o.material = o.material.clone();
+                }
+            });
+
+            // Log Bones and Animations for Analysis
+            console.log("--- BONE LIST ---");
+            model.traverse(c => {
+                if (c.isBone) console.log(c.name);
+            });
+
+            console.log("--- ANIMATIONS ---");
+            gltf.animations.forEach(a => console.log(a.name));
+
+            updateUniformColor();
+
+            // Skeleton Helper
+            const skeleton = new THREE.SkeletonHelper(model);
+            scene.add(skeleton);
+
+            // Animations
+            mixer = new THREE.AnimationMixer(model);
+            actions = {};
+            const names = [];
+            gltf.animations.forEach(a => {
+                actions[a.name] = mixer.clipAction(a);
+                names.push(a.name);
+            });
+
+            // Update Animation GUI
+            guiParams.anim = names[0] || 'Idle';
+            // (If strictly needed, could update controller, but standard text edit works)
+
             playAnim();
+            loadGun(); // Reload gun to attach to new mesh
+        },
+        (xhr) => {
+            // console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+        },
+        (error) => {
+            console.error("An error happened loading the model:", error);
+            alert("Error Loading Model! Open Console.");
         }
+    );
+}
 
-        // Attach Gun - DISABLED
-        /*
-        const rightHand = getBone(['mixamorigRightHand', 'RightHand', 'WristR']);
+function loadGun() {
+    if (currentGunMesh) {
+        if (currentGunMesh.parent) currentGunMesh.parent.remove(currentGunMesh);
+        currentGunMesh = null;
+    }
 
-        // Get Bones (Save refs)
-        rightArmBone = getBone(['mixamorigRightArm', 'RightArm', 'UpperArmR']);
-        rightForeArmBone = getBone(['mixamorigRightForeArm', 'RightForeArm', 'LowerArmR']);
-        leftArmBone = getBone(['mixamorigLeftArm', 'LeftArm', 'UpperArmL']);
-        leftForeArmBone = getBone(['mixamorigLeftForeArm', 'LeftForeArm', 'LowerArmL']);
-        spineBone = getBone(['mixamorigSpine', 'Spine', 'Chest', 'Torso']);
-
-        if (rightHand) {
-            // Remove existing gun if any
-            if (armyGun && armyGun.parent) {
-                armyGun.parent.remove(armyGun);
-            }
-            const gunData = createGun();
-            armyGun = gunData.group;
-
-            // Adjust Gun Position for Wrist Bone?
-            // Wrist is further back than Hand. We might need to move gun forward.
-            // Let's rely on the GUI sliders for that (User can adjust x/y/z).
-
-            rightHand.add(armyGun);
-            updateGunTransform();
-        } else {
-            console.error("COULD NOT FIND RIGHT HAND BONE!");
-        }
-        */
-
-        // Re-Init GUI to update Animation Dropdown
-        if (window.gui) window.gui.destroy();
-        initGUI(animNames);
+    loader.load(GUNS[guiParams.gunType], (gltf) => {
+        currentGunMesh = gltf.scene;
+        // Default orientation fix? Most guns point -Z or +Z.
+        updateGunParent();
     });
 }
 
+function updateGunParent() {
+    if (!currentGunMesh) return;
+
+    let parent = scene;
+    if (guiParams.parent === 'RightHand' && bones.RightHand) parent = bones.RightHand;
+    else if (guiParams.parent === 'Spine' && bones.Spine) parent = bones.Spine;
+
+    parent.add(currentGunMesh);
+}
+
 function updateColors() {
-    if (gunBodyMat) gunBodyMat.color.set(guiParams.gunBody);
-    if (gunWoodMat) gunWoodMat.color.set(guiParams.gunWood);
     updateUniformColor();
 }
 
 function updateUniformColor() {
     // Only color the Soldier (who has no texture). Adventurer/Punk have textures.
     if (guiParams.model === 'Soldier') {
-        if (soldierMesh) {
-            soldierMesh.traverse((child) => {
+        if (characterMesh) {
+            characterMesh.traverse((child) => {
                 if (child.isMesh && child.material) {
                     child.material.color.set(guiParams.uniform);
                 }
@@ -260,115 +259,65 @@ function updateUniformColor() {
     }
 }
 
-function initGUI(animOptions = ['Idle']) {
-    const gui = new dat.GUI();
-    window.gui = gui; // Save ref to destroy later
-
-    // Model Selection
-    gui.add(guiParams, 'model', ['Soldier', 'Adventurer', 'Punk']).onChange(loadSelectModel);
-
-    // Gun Transform
-    const folderPos = gui.addFolder('Gun Position');
-    folderPos.add(guiParams, 'x', -5, 5).onChange(updateGunTransform);
-    folderPos.add(guiParams, 'y', -5, 5).onChange(updateGunTransform);
-    folderPos.add(guiParams, 'z', -5, 5).onChange(updateGunTransform);
-
-    const folderRot = gui.addFolder('Gun Rotation (Deg)');
-    folderRot.add(guiParams, 'rx', -360, 360).onChange(updateGunTransform);
-    folderRot.add(guiParams, 'ry', -360, 360).onChange(updateGunTransform);
-    folderRot.add(guiParams, 'rz', -360, 360).onChange(updateGunTransform);
-
-    const folderScale = gui.addFolder('Scale');
-    folderScale.add(guiParams, 'scale', 1, 200).onChange(updateGunTransform);
-
-    // Right Arm
-    const folderRArm = gui.addFolder('Right Arm');
-    folderRArm.add(guiParams, 'rArmX', -6.3, 6.3);
-    folderRArm.add(guiParams, 'rArmY', -6.3, 6.3);
-    folderRArm.add(guiParams, 'rArmZ', -6.3, 6.3);
-    folderRArm.add(guiParams, 'rForeArmX', -6.3, 6.3);
-    folderRArm.add(guiParams, 'rForeArmY', -6.3, 6.3);
-    folderRArm.add(guiParams, 'rForeArmZ', -6.3, 6.3);
-
-    // Left Arm
-    const folderLArm = gui.addFolder('Left Arm');
-    folderLArm.add(guiParams, 'lArmX', -6.3, 6.3);
-    folderLArm.add(guiParams, 'lArmY', -6.3, 6.3);
-    folderLArm.add(guiParams, 'lArmZ', -6.3, 6.3);
-    folderLArm.add(guiParams, 'lForeArmX', -6.3, 6.3);
-    folderLArm.add(guiParams, 'lForeArmY', -6.3, 6.3);
-    folderLArm.add(guiParams, 'lForeArmZ', -6.3, 6.3);
-
-    // Spine
-    const folderSpine = gui.addFolder('Spine');
-    folderSpine.add(guiParams, 'spineX', -3, 3);
-    folderSpine.add(guiParams, 'spineY', -3, 3);
-
-    const folderColors = gui.addFolder('Colors');
-    folderColors.addColor(guiParams, 'gunBody').onChange(updateColors);
-    folderColors.addColor(guiParams, 'gunWood').onChange(updateColors);
-    folderColors.addColor(guiParams, 'uniform').onChange(updateColors);
-
-    const folderAnim = gui.addFolder('Animations');
-    folderAnim.add(guiParams, 'anim', animOptions).onChange(playAnim);
-
-    folderPos.open();
-    // folderRot.open();
-    folderAnim.open();
-}
-
-// Global playAnim helper
 function playAnim() {
     if (!mixer) return;
-    Object.values(actions).forEach(a => a.stop());
-    if (actions[guiParams.anim]) {
-        actions[guiParams.anim].play();
-    }
+    mixer.stopAllAction();
+    if (actions[guiParams.anim]) actions[guiParams.anim].play();
 }
 
-function updateGunTransform() {
-    if (!armyGun) return;
-    armyGun.position.set(guiParams.x, guiParams.y, guiParams.z);
-
-    // Deg to Rad
-    armyGun.rotation.set(
-        THREE.Math.degToRad(guiParams.rx),
-        THREE.Math.degToRad(guiParams.ry),
-        THREE.Math.degToRad(guiParams.rz)
-    );
-
-    armyGun.scale.set(guiParams.scale, guiParams.scale, guiParams.scale);
-}
-
-// Animate Loop
+// --- ANIMATION LOOP ---
 const clock = new THREE.Clock();
 function animate() {
     requestAnimationFrame(animate);
     const dt = clock.getDelta();
+
     if (mixer) mixer.update(dt);
 
-    /* DISABLED: User Request - No procedural override
-    if (spineBone && (guiParams.spineX !== 0 || guiParams.spineY !== 0)) {
-        spineBone.rotation.x += guiParams.spineX;
-        spineBone.rotation.y += guiParams.spineY;
+    // Apply Bone Overrides (Post-Animation)
+    // We do this every frame to override the animation pose
+    if (bones.RightArm) {
+        bones.RightArm.rotation.x += guiParams.rArmX;
+        bones.RightArm.rotation.y += guiParams.rArmY;
+        bones.RightArm.rotation.z += guiParams.rArmZ;
     }
-    
-    // Update gun transform and colors based on GUI
-    updateGunTransform(); // Keep this? User said "remove gun".
-    // If gun is removed from parent, transform update doesn't matter visually.
-    updateColors();
-    */
+    if (bones.RightForeArm) {
+        bones.RightForeArm.rotation.x += guiParams.rForeArmX;
+        bones.RightForeArm.rotation.y += guiParams.rForeArmY;
+        bones.RightForeArm.rotation.z += guiParams.rForeArmZ;
+    }
+    if (bones.RightHand) {
+        bones.RightHand.rotation.x += guiParams.rHandX;
+        bones.RightHand.rotation.y += guiParams.rHandY;
+        bones.RightHand.rotation.z += guiParams.rHandZ;
+    }
+    if (bones.Spine && (guiParams.spineX || guiParams.spineY || guiParams.spineZ)) {
+        bones.Spine.rotation.x += guiParams.spineX;
+        bones.Spine.rotation.y += guiParams.spineY;
+        bones.Spine.rotation.z += guiParams.spineZ;
+    }
 
-    // Force update colors just in case (or remove if texture handles it)
-    updateColors();
+    // Apply Gun Transform
+    if (currentGunMesh) {
+        currentGunMesh.position.set(guiParams.gx, guiParams.gy, guiParams.gz);
+        currentGunMesh.rotation.set(
+            THREE.Math.degToRad(guiParams.grx),
+            THREE.Math.degToRad(guiParams.gry),
+            THREE.Math.degToRad(guiParams.grz)
+        );
+        currentGunMesh.scale.set(guiParams.scale, guiParams.scale, guiParams.scale);
+    }
 
     renderer.render(scene, camera);
 }
-animate();
 
-// Resize
+init();
+
+// Handle Resize
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// Start Loop
+animate();

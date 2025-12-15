@@ -32,6 +32,13 @@ function spawnBlood(pos) {
     }
 }
 
+// Drops & Items
+const GUN_ASSETS = {
+    'MPSD': 'guns/Mpsd.glb',
+    'Sniper': 'guns/Sniper Rifle.glb'
+};
+let worldItems = []; // Array of { mesh, type, collider }
+
 // Variables for Controls
 let pitchObject, yawObject;
 let isLocked = false;
@@ -161,6 +168,94 @@ function generateGrassTexture() {
     return texture;
 }
 
+// --- ITEM SPAWNER ---
+function spawnWorldGun(type, pos) {
+    const url = GUN_ASSETS[type];
+    if (!url) return;
+
+    loader.load(url, (gltf) => {
+        const mesh = gltf.scene;
+        // Scale might need tuning per model. 
+        // Assuming they are "real scale", 1.0 might be handled.
+        // Let's make them slightly large to be noticeable.
+        mesh.scale.set(1.5, 1.5, 1.5);
+
+        mesh.position.copy(pos);
+        mesh.position.y = 0.5; // Float
+
+        // Add to scene
+        scene.add(mesh);
+
+        // Track
+        mesh.userData.isPickup = true;
+        mesh.userData.pickupType = type;
+        mesh.userData.floatPhase = Math.random() * Math.PI * 2;
+
+        worldItems.push(mesh);
+    });
+}
+
+
+
+function attachGunToBack(player, gunMesh) {
+    const ud = player.userData;
+    if (!ud.backGuns) ud.backGuns = [];
+
+    if (ud.spine) {
+        // Remove from world scene, attach to spine bone
+        scene.remove(gunMesh);
+        ud.spine.add(gunMesh);
+
+        const count = ud.backGuns.length;
+        const type = gunMesh.userData.pickupType || 'Default';
+
+        // --- CALIBRATION DATA ---
+        // Default (Sniper / Others)
+        let config = {
+            pos: new THREE.Vector3(0.15, 0.1, -0.2),
+            rot: new THREE.Vector3(0, Math.PI, Math.PI / 4),
+            scale: 1.5
+        };
+
+        if (type === 'MPSD') {
+            // USER CALIBRATED VALUES
+            // gx: -0.14, gy: 1.42, gz: -0.03
+            // Rot: -84, 0, 0
+            config.pos.set(-0.001, 0.000, -0.001);
+            config.rot.set(THREE.MathUtils.degToRad(-84), 0, 0);
+            config.scale = 0.02;
+        }
+
+        // Apply Scale
+        gunMesh.scale.set(config.scale, config.scale, config.scale);
+
+        // Position based on Slot
+        if (count === 0) {
+            // Slot 1
+            gunMesh.position.copy(config.pos);
+            gunMesh.rotation.setFromVector3(config.rot);
+        } else {
+            // Slot 2 (Second Gun)
+            if (type === 'MPSD') {
+                // For MPSD, Mirror across X axis (Left Shoulder vs Right Shoulder?)
+                // Assuming X=-0.14 is one side, X=0.14 would be other.
+                gunMesh.position.set(-config.pos.x, config.pos.y, config.pos.z);
+
+                // Rotation: If vertical, same rotation is fine.
+                // If it needs to be mirrored, we might need to tweak. 
+                // For now, use same rotation as Slot 1.
+                gunMesh.rotation.setFromVector3(config.rot);
+            } else {
+                // Default Cross Logic (Sniper)
+                gunMesh.position.set(-0.15, 0.1, -0.2);
+                gunMesh.rotation.set(0, Math.PI, -Math.PI / 4); // Cross
+            }
+        }
+
+        ud.backGuns.push(gunMesh);
+    }
+}
+
 // --- INITIALIZATION ---
 function initGame(playerData) {
     // socket is already init
@@ -236,9 +331,27 @@ function initGame(playerData) {
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
+    floor.receiveShadow = true;
     scene.add(floor);
 
+    // Spawn Demo Guns
+    spawnWorldGun('MPSD', new THREE.Vector3(2, 0, 5));
+    spawnWorldGun('Sniper', new THREE.Vector3(-2, 0, 5));
+    spawnWorldGun('MPSD', new THREE.Vector3(5, 0, 0)); // Various spots
+    spawnWorldGun('Sniper', new THREE.Vector3(-5, 0, 10));
+
     scene.add(yawObject); // Add camera control to scene
+
+    // --- 3D AUDIO SETUP (Opponents) ---
+    const listener = new THREE.AudioListener();
+    camera.add(listener);
+    window.audioListener = listener; // Global access for addEnemy
+
+    const audioLoader = new THREE.AudioLoader();
+    window.enemyStepBuffer = null;
+    audioLoader.load('sound-effect/Steps_dirt-017.ogg', function (buffer) {
+        window.enemyStepBuffer = buffer;
+    });
 
     // 7. Network Listeners
     socket.on('currentPlayers', (serverPlayers) => {
@@ -1009,6 +1122,17 @@ function addEnemy(id, data) {
         const enemy = charData.mesh;
         enemy.position.set(data.x, data.y, data.z);
 
+        // --- 3D AUDIO ---
+        if (window.audioListener && window.enemyStepBuffer) {
+            const sound = new THREE.PositionalAudio(window.audioListener);
+            sound.setBuffer(window.enemyStepBuffer);
+            sound.setRefDistance(5); // Distance where volume begins to fade
+            sound.setMaxDistance(50); // Audibility range
+            sound.setVolume(1.0); // Base volume (attenuated by distance)
+            enemy.add(sound);
+            enemy.userData.sound = sound;
+        }
+
         // Store mesh in map
         otherPlayers[id] = enemy;
         scene.add(enemy);
@@ -1017,11 +1141,11 @@ function addEnemy(id, data) {
 
 // Auto-Fire State
 const SFX_JUMP = new Audio('sound-effect/jumpland.wav');
-const SFX_STEP = new Audio('sound-effect/Steps_dirt-001.ogg');
+const SFX_STEP = new Audio('sound-effect/Steps_dirt-017.ogg');
 
 // Volume Configuration
-const VOL_RUN = 0.04; // Drastically reduced
-const VOL_JUMP = 0.02; // Drastically reduced
+const VOL_RUN = 0.26; // Drastically reduced
+const VOL_JUMP = 0.12; // Drastically reduced
 
 function playSound(audioSource, volume) {
     const s = audioSource.cloneNode();
@@ -1460,6 +1584,31 @@ function animate() {
             ud.stepTimer = 0;
         }
 
+        // --- ITEM PICKUP LOGIC ---
+        for (let i = worldItems.length - 1; i >= 0; i--) {
+            const item = worldItems[i];
+
+            // Float & Rotate
+            item.rotation.y += dt;
+            item.position.y = 0.5 + Math.sin(time * 2 + item.userData.floatPhase) * 0.1;
+
+            // Distance Check
+            const dist = myPlayerMesh.position.distanceTo(item.position);
+            if (dist < 1.5) {
+                // Pickup Check
+                if (!myPlayerMesh.userData.backGuns) myPlayerMesh.userData.backGuns = [];
+
+                if (myPlayerMesh.userData.backGuns.length < 2) {
+                    // Pickup
+                    worldItems.splice(i, 1); // Remove from list
+                    attachGunToBack(myPlayerMesh, item);
+
+                    // Simple Feedback Log
+                    console.log("Picked up " + item.userData.pickupType);
+                }
+            }
+        }
+
         myPlayerMesh.userData.isSprinting = isSprintToggled && hasInput; // For animation logic
 
         if (hasInput) {
@@ -1625,6 +1774,17 @@ function animate() {
                 // Smoothed Movement State (Network Interpolation)
                 if (speed > 0.1) {
                     ud.moveTimer = 0.2;
+
+                    // --- 3D AUDIO TRIGGER ---
+                    if (ud.sound && ud.sound.buffer) { // Check buffer loaded
+                        if (ud.stepTimer === undefined) ud.stepTimer = 0;
+                        ud.stepTimer -= dt;
+                        if (ud.stepTimer <= 0) {
+                            if (ud.sound.isPlaying) ud.sound.stop();
+                            ud.sound.play(); // Spatial Audio
+                            ud.stepTimer = 0.35; // Loop interval
+                        }
+                    }
                 } else {
                     if (ud.moveTimer > 0) ud.moveTimer -= dt;
                 }
