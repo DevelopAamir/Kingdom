@@ -56,7 +56,17 @@ let bones = {
     RightHand: null,
     RightArm: null,
     RightForeArm: null,
-    Spine: null
+    Spine: null,
+
+    // Left Arm
+    LeftHand: null,
+    LeftArm: null,
+    LeftForeArm: null,
+
+    // Fingers (Right)
+    R_Thumb: [], R_Index: [], R_Middle: [], R_Ring: [], R_Pinky: [],
+    // Fingers (Left)
+    L_Thumb: [], L_Index: [], L_Middle: [], L_Ring: [], L_Pinky: []
 };
 
 // GUI Parameters
@@ -79,23 +89,45 @@ let guiParams = {
     rArmX: 0, rArmY: 0, rArmZ: 0,
     rForeArmX: 0, rForeArmY: 0, rForeArmZ: 0,
     // Hand
+    // Hand
     rHandX: 0, rHandY: 0, rHandZ: 0,
+
+    // Left Arm
+    lArmX: 0, lArmY: 0, lArmZ: 0,
+    lForeArmX: 0, lForeArmY: 0, lForeArmZ: 0,
+    lHandX: 0, lHandY: 0, lHandZ: 0,
+
+    // Fingers (Right) - Curl 0 to 2.5
+    rThumbCurl: 0, rIndexCurl: 0, rMiddleCurl: 0, rRingCurl: 0, rPinkyCurl: 0,
+    // Fingers (Left)
+    lThumbCurl: 0, lIndexCurl: 0, lMiddleCurl: 0, lRingCurl: 0, lPinkyCurl: 0,
 
     // Spine
     spineX: 0, spineY: 0, spineZ: 0,
 
     // Actions
     logValues: () => {
+        const fR = [guiParams.rThumbCurl, guiParams.rIndexCurl, guiParams.rMiddleCurl, guiParams.rRingCurl, guiParams.rPinkyCurl].map(v => v.toFixed(2)).join(', ');
+        const fL = [guiParams.lThumbCurl, guiParams.lIndexCurl, guiParams.lMiddleCurl, guiParams.lRingCurl, guiParams.lPinkyCurl].map(v => v.toFixed(2)).join(', ');
+
         const msg = `
 GUN TRANSFORM (${guiParams.parent}):
-Position: ${guiParams.gx.toFixed(3)}, ${guiParams.gy.toFixed(3)}, ${guiParams.gz.toFixed(3)}
+Position: ${guiParams.gx.toFixed(4)}, ${guiParams.gy.toFixed(4)}, ${guiParams.gz.toFixed(4)}
 Rotation: ${guiParams.grx.toFixed(1)}, ${guiParams.gry.toFixed(1)}, ${guiParams.grz.toFixed(1)}
 Scale: ${guiParams.scale}
 
-BONE ROTATIONS:
+BONE ROTATIONS (Right):
 RightArm: ${guiParams.rArmX.toFixed(2)}, ${guiParams.rArmY.toFixed(2)}, ${guiParams.rArmZ.toFixed(2)}
 RightForeArm: ${guiParams.rForeArmX.toFixed(2)}, ${guiParams.rForeArmY.toFixed(2)}, ${guiParams.rForeArmZ.toFixed(2)}
 RightHand: ${guiParams.rHandX.toFixed(2)}, ${guiParams.rHandY.toFixed(2)}, ${guiParams.rHandZ.toFixed(2)}
+Fingers (T,I,M,R,P): ${fR}
+
+BONE ROTATIONS (Left):
+LeftArm: ${guiParams.lArmX.toFixed(2)}, ${guiParams.lArmY.toFixed(2)}, ${guiParams.lArmZ.toFixed(2)}
+LeftForeArm: ${guiParams.lForeArmX.toFixed(2)}, ${guiParams.lForeArmY.toFixed(2)}, ${guiParams.lForeArmZ.toFixed(2)}
+LeftHand: ${guiParams.lHandX.toFixed(2)}, ${guiParams.lHandY.toFixed(2)}, ${guiParams.lHandZ.toFixed(2)}
+Fingers (T,I,M,R,P): ${fL}
+
 Spine: ${guiParams.spineX.toFixed(2)}, ${guiParams.spineY.toFixed(2)}, ${guiParams.spineZ.toFixed(2)}
         `;
         console.log(msg);
@@ -126,27 +158,55 @@ function initGUI() {
 
     // Gun Transform
     const fTrans = gui.addFolder('Weapon Transform (Local)');
-    fTrans.add(guiParams, 'gx', -2, 2, 0.01);
-    fTrans.add(guiParams, 'gy', -2, 2, 0.01);
-    fTrans.add(guiParams, 'gz', -2, 2, 0.01);
-    fTrans.add(guiParams, 'grx', -360, 360).name('Rot X (Deg)');
-    fTrans.add(guiParams, 'gry', -360, 360).name('Rot Y (Deg)');
-    fTrans.add(guiParams, 'grz', -360, 360).name('Rot Z (Deg)');
-    fTrans.add(guiParams, 'scale', 0.1, 5);
+    fTrans.add(guiParams, 'gx', -2, 2, 0.000001);
+    fTrans.add(guiParams, 'gy', -2, 2, 0.000001);
+    fTrans.add(guiParams, 'gz', -2, 2, 0.000001);
+    fTrans.add(guiParams, 'grx', -360, 360, 0.000001).name('Rot X (Deg)');
+    fTrans.add(guiParams, 'gry', -360, 360, 0.000001).name('Rot Y (Deg)');
+    fTrans.add(guiParams, 'grz', -360, 360, 0.000001).name('Rot Z (Deg)');
+    fTrans.add(guiParams, 'scale', 0.0001, 5.0, 0.000001);
     fTrans.open();
 
     // Bones
-    const fBones = gui.addFolder('Bone Rotations');
-    fBones.add(guiParams, 'rArmX', -3.2, 3.2, 0.01).name('R.Arm X');
-    fBones.add(guiParams, 'rArmY', -3.2, 3.2, 0.01).name('R.Arm Y');
-    fBones.add(guiParams, 'rArmZ', -3.2, 3.2, 0.01).name('R.Arm Z');
-    fBones.add(guiParams, 'rForeArmX', -3.2, 3.2, 0.01).name('R.ForeArm X');
-    fBones.add(guiParams, 'rForeArmY', -3.2, 3.2, 0.01).name('R.ForeArm Y');
-    fBones.add(guiParams, 'rForeArmZ', -3.2, 3.2, 0.01).name('R.ForeArm Z');
-    fBones.add(guiParams, 'rHandX', -3.2, 3.2, 0.01).name('R.Hand X');
-    fBones.add(guiParams, 'rHandY', -3.2, 3.2, 0.01).name('R.Hand Y');
-    fBones.add(guiParams, 'rHandZ', -3.2, 3.2, 0.01).name('R.Hand Z');
+    const fBones = gui.addFolder('Right Arm Rotations');
+    fBones.add(guiParams, 'rArmX', -3.2, 3.2, 0.000001).name('R.Arm X');
+    fBones.add(guiParams, 'rArmY', -3.2, 3.2, 0.000001).name('R.Arm Y');
+    fBones.add(guiParams, 'rArmZ', -3.2, 3.2, 0.000001).name('R.Arm Z');
+    fBones.add(guiParams, 'rForeArmX', -3.2, 3.2, 0.000001).name('R.ForeArm X');
+    fBones.add(guiParams, 'rForeArmY', -3.2, 3.2, 0.000001).name('R.ForeArm Y');
+    fBones.add(guiParams, 'rForeArmZ', -3.2, 3.2, 0.000001).name('R.ForeArm Z');
+    fBones.add(guiParams, 'rHandX', -3.2, 3.2, 0.000001).name('R.Hand X');
+    fBones.add(guiParams, 'rHandY', -3.2, 3.2, 0.000001).name('R.Hand Y');
+    fBones.add(guiParams, 'rHandZ', -3.2, 3.2, 0.000001).name('R.Hand Z');
     fBones.open();
+
+    const fRFingers = gui.addFolder('Right Hand Fingers (Curl)');
+    fRFingers.add(guiParams, 'rThumbCurl', -1.0, 3.0, 0.000001).name('Thumb');
+    fRFingers.add(guiParams, 'rIndexCurl', -1.0, 3.0, 0.000001).name('Index');
+    fRFingers.add(guiParams, 'rMiddleCurl', -1.0, 3.0, 0.000001).name('Middle');
+    fRFingers.add(guiParams, 'rRingCurl', -1.0, 3.0, 0.000001).name('Ring');
+    fRFingers.add(guiParams, 'rPinkyCurl', -1.0, 3.0, 0.000001).name('Pinky');
+    fRFingers.open();
+
+    const fLeftBones = gui.addFolder('Left Arm Rotations');
+    fLeftBones.add(guiParams, 'lArmX', -3.2, 3.2, 0.000001).name('L.Arm X');
+    fLeftBones.add(guiParams, 'lArmY', -3.2, 3.2, 0.000001).name('L.Arm Y');
+    fLeftBones.add(guiParams, 'lArmZ', -3.2, 3.2, 0.000001).name('L.Arm Z');
+    fLeftBones.add(guiParams, 'lForeArmX', -3.2, 3.2, 0.000001).name('L.ForeArm X');
+    fLeftBones.add(guiParams, 'lForeArmY', -3.2, 3.2, 0.000001).name('L.ForeArm Y');
+    fLeftBones.add(guiParams, 'lForeArmZ', -3.2, 3.2, 0.000001).name('L.ForeArm Z');
+    fLeftBones.add(guiParams, 'lHandX', -3.2, 3.2, 0.000001).name('L.Hand X');
+    fLeftBones.add(guiParams, 'lHandY', -3.2, 3.2, 0.000001).name('L.Hand Y');
+    fLeftBones.add(guiParams, 'lHandZ', -3.2, 3.2, 0.000001).name('L.Hand Z');
+    fLeftBones.open();
+
+    const fLFingers = gui.addFolder('Left Hand Fingers (Curl)');
+    fLFingers.add(guiParams, 'lThumbCurl', -1.0, 3.0, 0.000001).name('Thumb');
+    fLFingers.add(guiParams, 'lIndexCurl', -1.0, 3.0, 0.000001).name('Index');
+    fLFingers.add(guiParams, 'lMiddleCurl', -1.0, 3.0, 0.000001).name('Middle');
+    fLFingers.add(guiParams, 'lRingCurl', -1.0, 3.0, 0.000001).name('Ring');
+    fLFingers.add(guiParams, 'lPinkyCurl', -1.0, 3.0, 0.000001).name('Pinky');
+    fLFingers.open();
 
     gui.add(guiParams, 'logValues').name('LOG VALUES');
 }
@@ -202,9 +262,81 @@ function loadCharacter() {
                 names.push(a.name);
             });
 
+            // Helper to find bone by multiple names or fuzzy search
+            const findBone = (candidates) => {
+                // 1. Exact Name Match
+                for (const name of candidates) {
+                    const bone = model.getObjectByName(name);
+                    if (bone) return bone;
+                }
+                // 2. Fuzzy Search (Includes)
+                let found = null;
+                model.traverse(c => {
+                    if (found) return;
+                    if (c.isBone) {
+                        const lowName = c.name.toLowerCase();
+                        for (const name of candidates) {
+                            if (lowName.includes(name.toLowerCase())) {
+                                found = c;
+                                return;
+                            }
+                        }
+                    }
+                });
+                return found;
+            };
+
+            // Find Bones (Robust Search)
+            bones.RightHand = findBone(['mixamorigRightHand', 'RightHand', 'HandR', 'WristR']);
+            bones.RightArm = findBone(['mixamorigRightArm', 'RightArm', 'ArmR', 'UpperArmR']);
+            bones.RightForeArm = findBone(['mixamorigRightForeArm', 'RightForeArm', 'ForeArmR', 'LowerArmR']);
+
+            bones.LeftHand = findBone(['mixamorigLeftHand', 'LeftHand', 'HandL', 'WristL']);
+            bones.LeftArm = findBone(['mixamorigLeftArm', 'LeftArm', 'ArmL', 'UpperArmL']);
+            bones.LeftForeArm = findBone(['mixamorigLeftForeArm', 'LeftForeArm', 'ForeArmL', 'LowerArmL']);
+
+            bones.Spine = findBone(['mixamorigSpine', 'Spine', 'Spine1', 'spines', 'Torso', 'Chest']);
+
+            // Find Fingers
+            const findFingerChain = (baseName, side) => {
+                const chain = [];
+                // Look for 1, 2, 3, 4 (e.g. Index1L or RightHandIndex1)
+                for (let i = 1; i <= 4; i++) {
+                    const candidates = [
+                        // Pattern 1: Index1L (Adventurer)
+                        `${baseName}${i}${side}`,
+                        // Pattern 2: RightHandIndex1 (Mixamo)
+                        `mixamorig${side === 'R' ? 'Right' : 'Left'}Hand${baseName}${i}`,
+                        // Pattern 3: RightHandIndex1 (Standard)
+                        `${side === 'R' ? 'Right' : 'Left'}Hand${baseName}${i}`
+                    ];
+                    const b = findBone(candidates);
+                    if (b) chain.push(b);
+                }
+                return chain;
+            };
+
+            // Naming: Thumb, Index, Middle, Ring, Pinky
+            bones.R_Thumb = findFingerChain('Thumb', 'R');
+            bones.R_Index = findFingerChain('Index', 'R');
+            bones.R_Middle = findFingerChain('Middle', 'R');
+            bones.R_Ring = findFingerChain('Ring', 'R');
+            bones.R_Pinky = findFingerChain('Pinky', 'R');
+
+            bones.L_Thumb = findFingerChain('Thumb', 'L');
+            bones.L_Index = findFingerChain('Index', 'L');
+            bones.L_Middle = findFingerChain('Middle', 'L');
+            bones.L_Ring = findFingerChain('Ring', 'L');
+            bones.L_Pinky = findFingerChain('Pinky', 'L');
+
+
+            console.log("--- DETECTED BONES ---");
+            console.log("Spine:", bones.Spine ? bones.Spine.name : "MISSING");
+            console.log("RightHand:", bones.RightHand ? bones.RightHand.name : "MISSING");
+            console.log("LeftHand:", bones.LeftHand ? bones.LeftHand.name : "MISSING");
+
             // Update Animation GUI
             guiParams.anim = names[0] || 'Idle';
-            // (If strictly needed, could update controller, but standard text edit works)
 
             playAnim();
             loadGun(); // Reload gun to attach to new mesh
@@ -236,10 +368,34 @@ function updateGunParent() {
     if (!currentGunMesh) return;
 
     let parent = scene;
-    if (guiParams.parent === 'RightHand' && bones.RightHand) parent = bones.RightHand;
-    else if (guiParams.parent === 'Spine' && bones.Spine) parent = bones.Spine;
+    let parentName = "Scene (Ground)";
+
+    if (guiParams.parent === 'RightHand') {
+        if (bones.RightHand) {
+            parent = bones.RightHand;
+            parentName = "RightHand (" + bones.RightHand.name + ")";
+        } else {
+            console.warn("RightHand Bone Not Found! Check Console.");
+            alert("RightHand Bone Not Found! Using Scene/Ground.");
+        }
+    }
+    else if (guiParams.parent === 'Spine') {
+        if (bones.Spine) {
+            parent = bones.Spine;
+            parentName = "Spine (" + bones.Spine.name + ")";
+        } else {
+            console.warn("Spine Bone Not Found! Check Console.");
+            alert("Spine Bone Not Found! Using Scene/Ground.");
+        }
+    }
 
     parent.add(currentGunMesh);
+    console.log(`Attached Gun to: ${parentName}`);
+
+    // Check Parent Scale
+    const s = new THREE.Vector3();
+    parent.getWorldScale(s);
+    console.log(`${parentName} World Scale: ${s.x.toFixed(3)}, ${s.y.toFixed(3)}, ${s.z.toFixed(3)}`);
 }
 
 function updateColors() {
@@ -276,24 +432,63 @@ function animate() {
     // Apply Bone Overrides (Post-Animation)
     // We do this every frame to override the animation pose
     if (bones.RightArm) {
-        bones.RightArm.rotation.x += guiParams.rArmX;
-        bones.RightArm.rotation.y += guiParams.rArmY;
-        bones.RightArm.rotation.z += guiParams.rArmZ;
+        bones.RightArm.rotation.x = guiParams.rArmX;
+        bones.RightArm.rotation.y = guiParams.rArmY;
+        bones.RightArm.rotation.z = guiParams.rArmZ;
     }
     if (bones.RightForeArm) {
-        bones.RightForeArm.rotation.x += guiParams.rForeArmX;
-        bones.RightForeArm.rotation.y += guiParams.rForeArmY;
-        bones.RightForeArm.rotation.z += guiParams.rForeArmZ;
+        bones.RightForeArm.rotation.x = guiParams.rForeArmX;
+        bones.RightForeArm.rotation.y = guiParams.rForeArmY;
+        bones.RightForeArm.rotation.z = guiParams.rForeArmZ;
     }
     if (bones.RightHand) {
-        bones.RightHand.rotation.x += guiParams.rHandX;
-        bones.RightHand.rotation.y += guiParams.rHandY;
-        bones.RightHand.rotation.z += guiParams.rHandZ;
+        bones.RightHand.rotation.x = guiParams.rHandX;
+        bones.RightHand.rotation.y = guiParams.rHandY;
+        bones.RightHand.rotation.z = guiParams.rHandZ;
     }
+    // Left Arm
+    if (bones.LeftArm) {
+        bones.LeftArm.rotation.x = guiParams.lArmX;
+        bones.LeftArm.rotation.y = guiParams.lArmY;
+        bones.LeftArm.rotation.z = guiParams.lArmZ;
+    }
+    if (bones.LeftForeArm) {
+        bones.LeftForeArm.rotation.x = guiParams.lForeArmX;
+        bones.LeftForeArm.rotation.y = guiParams.lForeArmY;
+        bones.LeftForeArm.rotation.z = guiParams.lForeArmZ;
+    }
+    if (bones.LeftHand) {
+        bones.LeftHand.rotation.x = guiParams.lHandX;
+        bones.LeftHand.rotation.y = guiParams.lHandY;
+        bones.LeftHand.rotation.z = guiParams.lHandZ;
+    }
+
+    // Finger Curls
+    const applyCurl = (chain, val) => {
+        chain.forEach(b => {
+            // Z rotation is standard curl for Mixamo
+            // but user wants to control it.
+            // We'll set X to keep it simple, or Z. 
+            // Try Z first.
+            b.rotation.z = val; // Usually curl
+        });
+    };
+
+    if (bones.R_Thumb) applyCurl(bones.R_Thumb, guiParams.rThumbCurl);
+    if (bones.R_Index) applyCurl(bones.R_Index, guiParams.rIndexCurl);
+    if (bones.R_Middle) applyCurl(bones.R_Middle, guiParams.rMiddleCurl);
+    if (bones.R_Ring) applyCurl(bones.R_Ring, guiParams.rRingCurl);
+    if (bones.R_Pinky) applyCurl(bones.R_Pinky, guiParams.rPinkyCurl);
+
+    if (bones.L_Thumb) applyCurl(bones.L_Thumb, guiParams.lThumbCurl);
+    if (bones.L_Index) applyCurl(bones.L_Index, guiParams.lIndexCurl);
+    if (bones.L_Middle) applyCurl(bones.L_Middle, guiParams.lMiddleCurl);
+    if (bones.L_Ring) applyCurl(bones.L_Ring, guiParams.lRingCurl);
+    if (bones.L_Pinky) applyCurl(bones.L_Pinky, guiParams.lPinkyCurl);
     if (bones.Spine && (guiParams.spineX || guiParams.spineY || guiParams.spineZ)) {
-        bones.Spine.rotation.x += guiParams.spineX;
-        bones.Spine.rotation.y += guiParams.spineY;
-        bones.Spine.rotation.z += guiParams.spineZ;
+        bones.Spine.rotation.x = guiParams.spineX;
+        bones.Spine.rotation.y = guiParams.spineY;
+        bones.Spine.rotation.z = guiParams.spineZ;
     }
 
     // Apply Gun Transform

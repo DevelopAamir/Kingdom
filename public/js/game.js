@@ -212,9 +212,9 @@ function attachGunToBack(player, gunMesh) {
         // --- CALIBRATION DATA ---
         // Default (Sniper / Others)
         let config = {
-            pos: new THREE.Vector3(0.15, 0.1, -0.2),
+            pos: new THREE.Vector3(-0.001, 0.000, -0.001),
             rot: new THREE.Vector3(0, Math.PI, Math.PI / 4),
-            scale: 1.5
+            scale: 0.0015
         };
 
         if (type === 'MPSD') {
@@ -223,7 +223,7 @@ function attachGunToBack(player, gunMesh) {
             // Rot: -84, 0, 0
             config.pos.set(-0.001, 0.000, -0.001);
             config.rot.set(THREE.MathUtils.degToRad(-84), 0, 0);
-            config.scale = 0.02;
+            config.scale = 0.025;
         }
 
         // Apply Scale
@@ -247,8 +247,8 @@ function attachGunToBack(player, gunMesh) {
                 gunMesh.rotation.setFromVector3(config.rot);
             } else {
                 // Default Cross Logic (Sniper)
-                gunMesh.position.set(-0.15, 0.1, -0.2);
-                gunMesh.rotation.set(0, Math.PI, -Math.PI / 4); // Cross
+                gunMesh.position.set(-config.pos.x, config.pos.y, config.pos.z);
+                gunMesh.rotation.setFromVector3(config.rot);
             }
         }
 
