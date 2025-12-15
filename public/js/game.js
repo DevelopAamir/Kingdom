@@ -569,13 +569,22 @@ function initGame(playerData) {
             else if (turn < -0.5) { keys['a'] = true; keys['d'] = false; }
             else { keys['a'] = false; keys['d'] = false; }
 
-            // Fixed: Joystick only handles Movement (WASD mapping), NOT Rotation.
-            // Rotation is handled by right-side screen swipe.
+
         });
 
         manager.on('end', () => {
             keys['w'] = false; keys['s'] = false;
             keys['a'] = false; keys['d'] = false;
+        });
+
+        // Cancel Auto-Run on Joystick Touch
+        manager.on('start', () => {
+            isSprintToggled = false;
+            const runBtn = document.getElementById('run-btn');
+            if (runBtn) {
+                runBtn.style.background = 'rgba(255, 165, 0, 0.5)';
+                runBtn.style.border = '2px solid white';
+            }
         });
 
         // Multi-touch Look Logic
@@ -643,6 +652,17 @@ function initGame(playerData) {
             jumpBtn.addEventListener('touchend', (e) => { e.preventDefault(); keys[' '] = false; });
         }
 
+        const runBtn = document.getElementById('run-btn');
+        if (runBtn) {
+            runBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                isSprintToggled = !isSprintToggled;
+                // Visual Feedback
+                runBtn.style.background = isSprintToggled ? 'rgba(200, 0, 0, 0.8)' : 'rgba(255, 165, 0, 0.5)';
+                runBtn.style.border = isSprintToggled ? '3px solid yellow' : '2px solid white';
+            });
+        }
+
     } else {
         document.addEventListener('mousemove', onMouseMove, false);
         document.addEventListener('mousedown', (e) => {
@@ -652,8 +672,30 @@ function initGame(playerData) {
 
         document.addEventListener('keydown', (e) => {
             keys[e.key.toLowerCase()] = true;
+
+            // Auto-Run Cancel on Manual Input (WASD)
+            if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase())) {
+                isSprintToggled = false;
+                const runBtn = document.getElementById('run-btn');
+                if (runBtn) {
+                    runBtn.style.background = 'rgba(255, 165, 0, 0.5)';
+                    runBtn.style.border = '2px solid white';
+                }
+            }
+
             if (e.key.toLowerCase() === 'c') toggleCamera();
             if (e.key === " ") keys[' '] = true; // Spacebar for jump
+
+            // Toggle Sprint
+            if (e.key === 'Shift') {
+                isSprintToggled = !isSprintToggled;
+                // Sync Mobile UI if exists (hybrid testing)
+                const runBtn = document.getElementById('run-btn');
+                if (runBtn) {
+                    runBtn.style.background = isSprintToggled ? 'rgba(200, 0, 0, 0.8)' : 'rgba(255, 165, 0, 0.5)';
+                    runBtn.style.border = isSprintToggled ? '3px solid yellow' : '2px solid white';
+                }
+            }
         });
         document.addEventListener('keyup', (e) => {
             keys[e.key.toLowerCase()] = false;
@@ -974,13 +1016,26 @@ function addEnemy(id, data) {
 }
 
 // Auto-Fire State
+const SFX_JUMP = new Audio('sound-effect/jumpland.wav');
+const SFX_STEP = new Audio('sound-effect/Steps_dirt-001.ogg');
+
+// Volume Configuration
+const VOL_RUN = 0.04; // Drastically reduced
+const VOL_JUMP = 0.02; // Drastically reduced
+
+function playSound(audioSource, volume) {
+    const s = audioSource.cloneNode();
+    s.volume = Math.min(1.0, Math.max(0, volume));
+    s.play().catch(() => { });
+}
+
 let isFiring = false;
-let lastFireTime = 0;
+let isSprintToggled = false; // Toggle state for Run
+let lastShotTime = 0;
 const FIRE_RATE = 0.15; // Seconds between shots
 
 function attemptShoot() {
     const now = Date.now() * 0.001;
-    if (now - lastFireTime < FIRE_RATE) return;
     lastFireTime = now;
 
     if (myPlayerMesh) {
@@ -1082,35 +1137,35 @@ function updateCharacterAnimation(mesh, dt, time) {
 
     /* DISABLED: User Request - Let animations play naturally
     // --- TWO HANDED GRIP LOGIC ---
-
+ 
     // 1. Right Arm (Aiming)
     if (ud.rightArm) {
         ud.rightArm.rotation.x = 0.84 + pitch + recoil;
         ud.rightArm.rotation.y = 0.43;
         ud.rightArm.rotation.z = 0.57;
     }
-
+ 
     // 2. Right Forearm
     if (ud.rightForeArm) {
         ud.rightForeArm.rotation.x = 1.0;
         ud.rightForeArm.rotation.y = 1.0;
         ud.rightForeArm.rotation.z = 0;
     }
-
+ 
     // 3. Left Arm (Reaching for Barrel)
     if (ud.leftArm) {
         ud.leftArm.rotation.x = -0.55;
         ud.leftArm.rotation.y = -0.96;
         ud.leftArm.rotation.z = -5.5; 
     }
-
+ 
     // 4. Left Forearm (Bent to hold foregrip)
     if (ud.leftForeArm) {
         ud.leftForeArm.rotation.x = 0.15;
         ud.leftForeArm.rotation.y = -0.4;
         ud.leftForeArm.rotation.z = -4.9;
     }
-
+ 
     // 5. Spine (Twist to align shoulders)
     if (ud.spine) {
         ud.spine.rotation.x = 0;
@@ -1147,7 +1202,7 @@ function updateCharacterAnimation(mesh, dt, time) {
         ud.spine.rotation.y = 0.4; // Twist right
         ud.spine.rotation.z = 0;
     }
-
+ 
     /* DISABLED: Manual bone overrides removed. Animation Mixer handles everything now. */
 }
 
@@ -1320,7 +1375,9 @@ function animate() {
         // We now decouple rotation if moving
 
         // 2. Movement Inputs
-        const moveForward = keys['w'];
+        let moveForward = keys['w'];
+        if (isSprintToggled) moveForward = true; // Auto-Run / Run-Lock
+
         const moveBackward = keys['s'];
         const moveLeft = keys['a'];
         const moveRight = keys['d'];
@@ -1382,7 +1439,29 @@ function animate() {
         yawObject.position.z = myPlayerMesh.position.z;
 
         // 3. Apply Velocity
-        const speed = 0.1 * timeScale; // Adjusted for Delta Time
+        let baseSpeed = 0.1;
+        if (isSprintToggled) baseSpeed = 0.12; // 20% faster (adjusted from 0.15)
+
+        const speed = baseSpeed * timeScale; // Adjusted for Delta Time
+
+        // --- AUDIO: FOOTSTEPS ---
+        const ud = myPlayerMesh.userData;
+        if (ud.stepTimer === undefined) ud.stepTimer = 0;
+
+        if (isMoving && ud.isGrounded) {
+            ud.stepTimer -= dt;
+            if (ud.stepTimer <= 0) {
+                playSound(SFX_STEP, VOL_RUN); // Play Footstep Sound (Source + Vol)
+                // Faster steps if sprinting, but gap increased as requested
+                ud.stepTimer = isSprintToggled ? 0.35 : 0.55;
+            }
+        } else {
+            // Reset timer so step plays immediately when starting to move
+            ud.stepTimer = 0;
+        }
+
+        myPlayerMesh.userData.isSprinting = isSprintToggled && hasInput; // For animation logic
+
         if (hasInput) {
             // Move in the direction the PLAYER IS FACING (since we rotated him)
             // actually, we should move relative to CAMERA still to be precise input
@@ -1407,6 +1486,12 @@ function animate() {
         // Ground Collision
         let isGrounded = false;
         if (myPlayerMesh.position.y <= 0) {
+            // Play Landing Sound if previously in air
+            if (!myPlayerMesh.userData.isGrounded && myPlayerMesh.userData.velocityY < 0) {
+                // Added velocity check to avoid spam on spawn/jitter
+                playSound(SFX_JUMP, VOL_JUMP);
+            }
+
             myPlayerMesh.position.y = 0;
             myPlayerMesh.userData.velocityY = 0;
             isGrounded = true;
@@ -1466,17 +1551,17 @@ function animate() {
 
             const ud = myPlayerMesh.userData;
             const actions = ud.actions;
-            const moveForward = keys['w'];
-            const moveBackward = keys['s'];
-            const moveLeft = keys['a'];
-            const moveRight = keys['d'];
-            const isMoving = moveForward || moveBackward || moveLeft || moveRight;
+
+            // Fix: Use the computed 'isMoving' state from the Movement block
+            // This ensures Auto-Run (which overrides moveForward) is respected.
+            const isMoving = ud.isMoving;
 
             if (actions) {
                 // If dead, don't update state (Death anim is playing once via listener)
                 if (!ud.isDead) { // FIX: Changed from return to if block so we don't exit render loop
                     // Determine Target State
                     let targetAction = actions.idle;
+                    // Use cached isMoving from Movement Block - This line is now redundant as `isMoving` is already defined above.
 
                     // HIT STATE (Exclusive)
                     if (ud.hitTimer > 0) {
@@ -1484,7 +1569,6 @@ function animate() {
                         if (actions.hit) {
                             targetAction = actions.hit;
                             targetAction.setLoop(THREE.LoopOnce);
-                            targetAction.clampWhenFinished = true;
                         }
                     } else if (!ud.isGrounded) {
                         // In Air: Play Run animation in slow motion (pseudo-jump)
@@ -1492,9 +1576,13 @@ function animate() {
                         actions.run.timeScale = 0.5; // Slow
                         actions.run.setLoop(THREE.LoopRepeat);
                     } else if (isMoving) {
-                        // On Ground: Fast Run
+                        // On Ground: Run
                         targetAction = actions.run;
-                        actions.run.timeScale = 1.5;
+                        if (ud.isSprinting) {
+                            actions.run.timeScale = 1.6; // Sprint Speed (Adjusted for 0.12 movement)
+                        } else {
+                            actions.run.timeScale = 1.3; // Normal Run Speed (Slightly slower than before to differentiate)
+                        }
                         actions.run.setLoop(THREE.LoopRepeat);
                     } else {
                         targetAction = actions.idle;
