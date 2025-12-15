@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Infinite Battle</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            user-select: none;
+            touch-action: none;
+            /* Prevent scroll/zoom on mobile */
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        /* CROSSHAIR - Free Fire Style */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 5;
+            width: 40px;
+            height: 40px;
+            pointer-events: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* The Ring */
+        #crosshair::before {
+            content: '';
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            border: 2px solid rgba(255, 255, 255, 0.9);
+            border-radius: 50%;
+            box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+        }
+
+        /* The Dot */
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 50%;
+            box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+        }
+
+        /* DAMAGE OVERLAY */
+        #damage-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+            /* Above Crosshair? No usually below UI, above scene. Crosshair is z-5. */
+            /* Crosshair is z-index 5. Let's make this z-index 4 so crosshair stays white? */
+            /* Or make it z-index 10 to redden everything? Usually HUD is on top. */
+            /* Let's keep it z-index 2 (scene is canvas). UI layer is absolute. */
+            z-index: 4;
+            opacity: 0;
+            background: radial-gradient(circle, transparent 40%, rgba(255, 0, 0, 0.6) 100%);
+            transition: opacity 0.1s;
+        }
+
+
+
+        /* LOGIN SCREEN */
+        #login-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            z-index: 10;
+        }
+
+        input {
+            padding: 10px;
+            font-size: 16px;
+            width: 200px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        .damage-popup {
+            position: absolute;
+            color: red;
+            font-weight: bold;
+            font-size: 24px;
+            pointer-events: none;
+            user-select: none;
+            text-shadow: 1px 1px 0 #000;
+            animation: floatUp 1s forwards;
+        }
+
+        @keyframes floatUp {
+            0% {
+                opacity: 1;
+                transform: translateY(0) scale(1.0);
+            }
+
+            50% {
+                opacity: 1;
+                transform: translateY(-30px) scale(1.2);
+            }
+
+            100% {
+                opacity: 0;
+                transform: translateY(-60px) scale(1.0);
+            }
+        }
+
+        #damage-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            background: radial-gradient(circle, transparent 60%, rgba(255, 0, 0, 0.6) 100%);
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 50;
+            /* Below UI but above game */
+        }
+
+        /* Mobile Jump Button */
+        #jump-btn {
+            position: absolute;
+            bottom: 40px;
+            right: 140px;
+            /* Left of Fire Button */
+            width: 80px;
+            height: 80px;
+            background: rgba(0, 0, 255, 0.5);
+            /* Blueish */
+            border-radius: 50%;
+            border: 2px solid white;
+            pointer-events: auto;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: bold;
+            color: white;
+            user-select: none;
+            touch-action: manipulation;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Damage Overlay -->
+    <div id="damage-overlay"></div>
+
+
+    <div id="login-screen">
+        <div style="text-align:center; color: white;">
+            <h1>INFINITE BATTLE</h1>
+            <p>Battle Royale - Persistent World</p>
+            <input type="text" id="username" placeholder="Username" value="Survivor">
+            <br><br>
+            <input type="password" id="password" placeholder="Password" value="121212">
+
+            <!-- Character Selection -->
+            <div style="margin: 10px 0; color: white;">
+                <label>Select Character:</label>
+                <select id="char-select" style="padding: 5px; border-radius: 4px;">
+                    <option value="Soldier">Soldier (Standard)</option>
+                    <option value="Adventurer">Adventurer</option>
+                    <option value="Punk">Punk</option>
+                </select>
+            </div>
+
+            <button onclick="doLogin()">Login / Continue</button>
+            <button onclick="doSignup()" style="background:#007bff">SIGNUP</button>
+            <p id="auth-msg" style="color:red; font-size:12px;"></p>
+        </div>
+    </div>
+
+    <div id="ui-layer" style="display:none;">
+        <div id="damage-overlay"></div>
+        <!-- Damage Numbers Container -->
+        <div id="damage-container"
+            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden;">
+        </div>
+
+        <div id="crosshair"></div>
+        <div
+            style="position:absolute; top:20px; left:20px; color:white; font-weight:bold; text-shadow: 1px 1px 2px black;">
+            Health: <span id="health-display" style="color:red">100%</span>
+            <br>
+            Inventory: <span id="inv-display">Empty</span>
+        </div>
+        <div id="death-screen"
+            style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); flex-direction:column; justify-content:center; align-items:center; color:red; font-size:40px; font-weight:bold; text-shadow: 2px 2px 0 #000; z-index:20;">
+            YOU DIED!
+            <div style="font-size:20px; color:white;">Respawning...</div>
+        </div>
+        <div id="pause-screen"
+            style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); color:white; display:flex; justify-content:center; align-items:center; flex-direction:column; z-index:20; pointer-events: auto;">
+            <h1>PAUSED</h1>
+            <p>Press ESC to release mouse, Click here to Resume</p>
+            <button onclick="document.body.requestPointerLock()"
+                style="font-size:20px; padding:10px 30px; cursor:pointer;">RESUME</button>
+        </div>
+        <div id="notification-msg"
+            style="display:none; position:absolute; top:20%; left:50%; transform:translate(-50%, -50%); color: gold; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 0 black; padding: 10px; background: rgba(0,0,0,0.5); border-radius: 5px; pointer-events: none;">
+        </div>
+
+        <!-- Mobile Controls -->
+        <div id="mobile-controls" style="display:none;">
+            <div id="joystick-zone"
+                style="position:absolute; bottom:20px; left:20px; width:150px; height:150px; pointer-events:auto;">
+            </div>
+            <button id="mobile-fire-btn"
+                style="position:absolute; bottom:40px; right:40px; width:80px; height:80px; border-radius:50%; background:rgba(255,0,0,0.5); border:2px solid white; color:white; font-weight:bold; pointer-events:auto; touch-action:manipulation;">FIRE</button>
+            <div id="jump-btn">JUMP</div>
+            <button onclick="toggleCamera()"
+                style="position:absolute; top:50px; right:10px; padding:5px 10px; background:rgba(0,0,0,0.5); color:white; border:1px solid white; font-size:12px; pointer-events:auto;">CAM
+                (TPP)</button>
+            <button onclick="document.documentElement.requestFullscreen()"
+                style="position:absolute; top:10px; right:10px; padding:5px 10px; background:rgba(0,0,0,0.5); color:white; border:1px solid white; font-size:12px; pointer-events:auto;">FULL
+                SCREEN</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/game.js"></script>
+</body>
+
+</html>
