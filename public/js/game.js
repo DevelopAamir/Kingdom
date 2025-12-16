@@ -1163,6 +1163,9 @@ function attemptShoot() {
     lastFireTime = now;
 
     if (myPlayerMesh) {
+        // FIX: Prevent shooting if dead
+        if (myPlayerMesh.userData.isDead) return;
+
         // Recoil Impulse
         if (!myPlayerMesh.userData.currentRecoil) myPlayerMesh.userData.currentRecoil = 0;
         myPlayerMesh.userData.currentRecoil += 0.2; // Aim kick up
@@ -1500,7 +1503,19 @@ function animate() {
 
         // 2. Movement Inputs
         let moveForward = keys['w'];
-        if (isSprintToggled) moveForward = true; // Auto-Run / Run-Lock
+
+        // FIX: Disable movement if dead
+        if (myPlayerMesh.userData.isDead) {
+            moveForward = false;
+            isSprintToggled = false; // Cancel auto-run
+            // Force others false for local variables (keys object remains touched but we override vars)
+            keys['s'] = false;
+            keys['a'] = false;
+            keys['d'] = false;
+        }
+        else if (isSprintToggled) {
+            moveForward = true; // Auto-Run / Run-Lock
+        }
 
         const moveBackward = keys['s'];
         const moveLeft = keys['a'];

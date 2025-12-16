@@ -15,6 +15,11 @@ db.serialize(() => {
         y REAL DEFAULT 1,
         z REAL DEFAULT 0
     )`);
+    db.run(`CREATE TABLE IF NOT EXISTS calibration (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT UNIQUE,
+        data TEXT
+    )`);
 });
 
 const Database = {
@@ -58,6 +63,30 @@ const Database = {
             [data.health, invStr, data.x, data.y, data.z, username], (err) => {
                 if (err) console.error("Save Error:", err);
             });
+    },
+
+    saveCalibration: (type, dataObj) => {
+        return new Promise((resolve, reject) => {
+            const str = JSON.stringify(dataObj);
+            db.run(`INSERT OR REPLACE INTO calibration (type, data) VALUES (?, ?)`, [type, str], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    getCalibration: (type) => {
+        return new Promise((resolve, reject) => {
+            db.get(`SELECT data FROM calibration WHERE type = ?`, [type], (err, row) => {
+                if (err) return reject(err);
+                if (!row) return resolve(null);
+                try {
+                    resolve(JSON.parse(row.data));
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        });
     }
 };
 

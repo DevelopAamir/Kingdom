@@ -5,6 +5,7 @@ const io = require('socket.io')(http);
 const db = require('./database');
 
 app.use(express.static('public'));
+app.use(express.json()); // Enable JSON body parsing
 
 // In-Memory Game State
 // players[socket.id] = { username, health, x, y, z, rotation, inventory, ... }
@@ -142,6 +143,27 @@ io.on('connection', (socket) => {
             io.emit('playerDisconnected', socket.id);
         }
     });
+});
+
+// --- API ROUTES ---
+app.post('/api/calibration', async (req, res) => {
+    try {
+        await db.saveCalibration(req.body.type, req.body.data);
+        res.json({ success: true });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/calibration/:type', async (req, res) => {
+    try {
+        const data = await db.getCalibration(req.params.type);
+        res.json(data || {});
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 http.listen(3000, '0.0.0.0', () => {

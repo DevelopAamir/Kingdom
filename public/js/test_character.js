@@ -132,13 +132,19 @@ Spine: ${guiParams.spineX.toFixed(2)}, ${guiParams.spineY.toFixed(2)}, ${guiPara
         `;
         console.log(msg);
         alert("Values logged to Console (Cmd+Option+J to view)");
+    },
+
+    save: () => {
+        saveCalibrationData();
     }
 };
 
 const loader = new THREE.GLTFLoader();
 
 // --- INITIALIZATION ---
-function init() {
+// --- INITIALIZATION ---
+async function init() {
+    await loadCalibrationData(); // Load saved values first
     initGUI();
     loadCharacter();
 }
@@ -209,6 +215,7 @@ function initGUI() {
     fLFingers.open();
 
     gui.add(guiParams, 'logValues').name('LOG VALUES');
+    gui.add(guiParams, 'save').name('💾 SAVE TO DB');
 }
 
 // --- LOADING ---
@@ -359,7 +366,8 @@ function loadGun() {
 
     loader.load(GUNS[guiParams.gunType], (gltf) => {
         currentGunMesh = gltf.scene;
-        // Default orientation fix? Most guns point -Z or +Z.
+        // Fix Gimbal Lock issues by changing order
+        currentGunMesh.rotation.order = 'YXZ';
         updateGunParent();
     });
 }
@@ -515,4 +523,53 @@ window.addEventListener('resize', () => {
 });
 
 // Start Loop
+// Start Loop
 animate();
+
+// --- PERSISTENCE ---
+async function saveCalibrationData() {
+    const data = { ...guiParams };
+    // Remove functions
+    delete data.logValues;
+    delete data.save;
+
+    try {
+        const res = await fetch('/api/calibration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'sandbox', data: data })
+        });
+        const json = await res.json();
+        if (json.success) {
+            alert("Saved to Database!");
+        } else {
+            alert("Save Failed: " + json.error);
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Save Error (Check Console)");
+    }
+}
+
+async function loadCalibrationData() {
+    try {
+        const res = await fetch('/api/calibration/sandbox');
+        const data = await res.json();
+        if (data && Object.keys(data).length > 0) {
+            console.log("Loaded Calibration Data:", data);
+            // Merge into guiParams
+            Object.assign(guiParams, data);
+
+            // Restore methods if overwritten (Object.assign overwrites everything)
+            // But we deleted them before saving, so they are missing in 'data'.
+            // guiParams methods are defined in original object.
+            // Wait, Object.assign(target, source).
+            // guiParams now has values. Methods are preserved in original guiParams referenced?
+            // No, guiParams IS the target.
+            // If data doesn't have 'logValues', it won't overwrite existing 'logValues'.
+            // Correct.
+        }
+    } catch (e) {
+        console.warn("Could not load calibration data (server might be offline or empty db)", e);
+    }
+}
