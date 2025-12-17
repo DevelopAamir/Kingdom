@@ -72,6 +72,8 @@ io.on('connection', (socket) => {
             p.y = movementData.y;
             p.z = movementData.z;
             p.rotation = movementData.rotation;
+            p.pitch = movementData.pitch;
+            p.equippedSlot = movementData.equippedSlot;
 
             socket.broadcast.emit('playerMoved', { id: socket.id, ...p });
         }
@@ -95,7 +97,6 @@ io.on('connection', (socket) => {
             io.to(targetId).emit('updateHealth', target.health);
             // Include damage amount for visual feedback
             io.emit('playerDamaged', { id: targetId, health: target.health, damage: 10 });
-
             if (target.health <= 0) {
                 // PLAYER DIED
                 io.emit('playerDied', { id: targetId, killerId: socket.id });
@@ -128,6 +129,16 @@ io.on('connection', (socket) => {
                     }
                 }, 3000); // 3 Seconds Delay
             }
+        }
+    });
+
+    socket.on('updateInventory', (inventory) => {
+        if (players[socket.id]) {
+            players[socket.id].inventory = inventory;
+            socket.broadcast.emit('playerInventoryUpdated', {
+                id: socket.id,
+                inventory: inventory
+            });
         }
     });
 

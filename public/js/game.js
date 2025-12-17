@@ -369,6 +369,16 @@ function initGame(playerData) {
             const op = otherPlayers[data.id];
             if (op.userData && op.userData.isDead) return; // Don't update pos/rot if dead (preserve death anim)
 
+            // Weapon Sync
+            if (data.equippedSlot !== op.userData.equippedSlot) {
+                // Determine if valid slot
+                if (data.equippedSlot !== null && data.equippedSlot !== undefined) {
+                    equipWeapon(data.equippedSlot, op);
+                } else {
+                    unequipWeapon(op);
+                }
+            }
+
             op.position.set(data.x, data.y, data.z);
             otherPlayers[data.id].rotation.y = data.rotation;
 
@@ -1180,6 +1190,12 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
 
 
 function addEnemy(id, data) {
+    // Prevent Duplicates
+    if (otherPlayers[id]) {
+        scene.remove(otherPlayers[id]);
+        delete otherPlayers[id];
+    }
+
     loadCharacter(data.model || 'Soldier', 0x00ff00, false, (charData) => {
         const enemy = charData.mesh;
         enemy.position.set(data.x, data.y, data.z);
@@ -1198,6 +1214,26 @@ function addEnemy(id, data) {
         // Store mesh in map
         otherPlayers[id] = enemy;
         scene.add(enemy);
+
+        // Load Opponent Guns (From Inventory Data)
+        if (data.inventory && Array.isArray(data.inventory)) {
+            data.inventory.forEach((type) => {
+                // If type is object (from some legacy code), extract type property? 
+                // Assuming string 'MPSD' etc.
+                const url = GUN_ASSETS[type] || GUN_ASSETS['MPSD'];
+
+                const loader = new THREE.GLTFLoader();
+                loader.load(url, (gltf) => {
+                    const gun = gltf.scene;
+                    gun.userData.pickupType = type;
+                    gun.traverse(c => {
+                        if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+                        c.userData.isGun = true;
+                    });
+                    attachGunToBack(enemy, gun);
+                });
+            });
+        }
     });
 }
 
@@ -1506,14 +1542,15 @@ function toggleWeapon(slot) {
     if (!ud.backGuns || !ud.backGuns[slot]) return;
 
     if (ud.equippedSlot === slot) {
-        unequipWeapon(); // Holster
+        unequipWeapon(myPlayerMesh); // Holster
     } else {
-        equipWeapon(slot);
+        equipWeapon(slot, myPlayerMesh);
     }
 }
 
-function unequipWeapon() {
-    const ud = myPlayerMesh.userData;
+function unequipWeapon(targetPlayer = myPlayerMesh) {
+    if (!targetPlayer) return;
+    const ud = targetPlayer.userData;
     if (ud.equippedSlot === null || ud.equippedSlot === undefined) return;
 
     const slot = ud.equippedSlot;
@@ -1542,7 +1579,7 @@ function unequipWeapon() {
     }
 
     ud.equippedSlot = null;
-    isFiring = false;
+    if (targetPlayer === myPlayerMesh) isFiring = false;
 
     // Reset rotations to prevent stuck posture
     const resetBone = (b) => {
@@ -1562,10 +1599,14 @@ function unequipWeapon() {
     console.log("Holstered Weapon");
 }
 
-function equipWeapon(slot) {
-    unequipWeapon(); // Ensure nothing else is held
+function equipWeapon(slot, targetPlayer = myPlayerMesh) {
+    unequipWeapon(targetPlayer); // Ensure nothing else is held
 
-    const ud = myPlayerMesh.userData;
+    if (!targetPlayer) return;
+    const ud = targetPlayer.userData;
+
+    if (!ud.backGuns) return;
+
     const gunMesh = ud.backGuns[slot];
 
     if (gunMesh && ud.spine) {
@@ -1586,7 +1627,7 @@ function equipWeapon(slot) {
         gunMesh.rotation.order = 'YXZ';
 
         ud.equippedSlot = slot;
-        console.log(`Equipped Weapon ${slot + 1}`);
+        if (targetPlayer === myPlayerMesh) console.log(`Equipped Weapon ${slot + 1}`);
     }
 }
 
@@ -1902,6 +1943,10 @@ function animate() {
                     worldItems.splice(i, 1); // Remove from list
                     attachGunToBack(myPlayerMesh, item);
 
+                    // Sync Inventory to Server
+                    const inv = myPlayerMesh.userData.backGuns.map(g => g.userData.pickupType || 'Default');
+                    socket.emit('updateInventory', inv);
+
                     // Simple Feedback Log
                     console.log("Picked up " + item.userData.pickupType);
                 }
@@ -2144,7 +2189,8 @@ function animate() {
                     y: myPlayerMesh.position.y,
                     z: myPlayerMesh.position.z,
                     rotation: myPlayerMesh.rotation.y,
-                    pitch: pitchObject.rotation.x // Send vertical look
+                    pitch: pitchObject.rotation.x, // Send vertical look
+                    equippedSlot: myPlayerMesh.userData.equippedSlot
                 });
             }
 
