@@ -128,7 +128,8 @@ socket.on('loginSuccess', (data) => {
                 document.getElementById('pause-screen').style.display = 'none';
             } else {
                 // Check if logged in before showing pause
-                if (document.getElementById('ui-layer').style.display === 'block') {
+                // Check if logged in before showing pause
+                if (document.getElementById('ui-layer').style.display === 'block' && !window.isCalibrationMode) {
                     document.getElementById('pause-screen').style.display = 'flex';
                 }
             }
@@ -871,6 +872,7 @@ const BONE_MAPPINGS = {
     rightForeArm: ['mixamorigRightForeArm', 'RightForeArm', 'LowerArmR'],
     leftArm: ['mixamorigLeftArm', 'LeftArm', 'UpperArmL'],
     leftForeArm: ['mixamorigLeftForeArm', 'LeftForeArm', 'LowerArmL'],
+    leftHand: ['mixamorigLeftHand', 'LeftHand', 'WristL'],
     spine: ['mixamorigSpine', 'Spine', 'Chest', 'Torso'],
     head: ['mixamorigHead', 'Head'],
     leftLeg: ['mixamorigLeftUpLeg', 'UpperLegL', 'LeftUpLeg', 'UpLegL', 'ThighL'],
@@ -1007,14 +1009,58 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
         idleAction.play(); // DEFAULT STATE
         runAction.stop();
 
-        // Bone Helper
-        const getBone = (names) => {
-            for (const name of names) {
-                const b = model.getObjectByName(name);
-                if (b) return b;
+        // Bone Helper (Robust Fuzzy Search)
+        const findBone = (candidates) => {
+            // 1. Exact Name Match
+            for (const name of candidates) {
+                const bone = model.getObjectByName(name);
+                if (bone) return bone;
             }
-            return null;
+            // 2. Fuzzy Search (Includes)
+            let found = null;
+            model.traverse(c => {
+                if (found) return;
+                if (c.isBone) {
+                    const lowName = c.name.toLowerCase();
+                    for (const name of candidates) {
+                        if (lowName.includes(name.toLowerCase())) {
+                            found = c;
+                            return;
+                        }
+                    }
+                }
+            });
+            return found;
         };
+
+        const getBone = (names) => findBone(names); // shim
+
+        const findFingerChain = (baseName, side) => {
+            const chain = [];
+            for (let i = 1; i <= 4; i++) {
+                const candidates = [
+                    `${baseName}${i}${side}`,
+                    `mixamorig${side === 'R' ? 'Right' : 'Left'}Hand${baseName}${i}`,
+                    `${side === 'R' ? 'Right' : 'Left'}Hand${baseName}${i}`
+                ];
+                const b = findBone(candidates);
+                if (b) chain.push(b);
+            }
+            return chain;
+        };
+
+        // Find Fingers
+        const rThumb = findFingerChain('Thumb', 'R');
+        const rIndex = findFingerChain('Index', 'R');
+        const rMiddle = findFingerChain('Middle', 'R');
+        const rRing = findFingerChain('Ring', 'R');
+        const rPinky = findFingerChain('Pinky', 'R');
+
+        const lThumb = findFingerChain('Thumb', 'L');
+        const lIndex = findFingerChain('Index', 'L');
+        const lMiddle = findFingerChain('Middle', 'L');
+        const lRing = findFingerChain('Ring', 'L');
+        const lPinky = findFingerChain('Pinky', 'L');
 
         const rightHand = getBone(BONE_MAPPINGS.rightHand);
 
@@ -1025,11 +1071,14 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
         let rightForeArm = null;
         let leftArm = null;
         let leftForeArm = null;
+        let leftHand = null;
         let spine = null;
         let head = null;
         let leftLeg = null;
         let rightLeg = null;
         let aimBone = null;
+
+        let restRotations = {};
 
         if (rightHand) {
             // Find the Arm Bones for Two-Handed Hold
@@ -1037,6 +1086,7 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
             rightForeArm = getBone(BONE_MAPPINGS.rightForeArm);
             leftArm = getBone(BONE_MAPPINGS.leftArm);
             leftForeArm = getBone(BONE_MAPPINGS.leftForeArm);
+            leftHand = getBone(BONE_MAPPINGS.leftHand);
             spine = getBone(BONE_MAPPINGS.spine);
             head = getBone(BONE_MAPPINGS.head);
             leftLeg = getBone(BONE_MAPPINGS.leftLeg);
@@ -1052,6 +1102,11 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
             const gun = gunData.group;
             muzzle = gunData.muzzle;
             muzzleFlash = gunData.flash;
+
+            // Capture Rest Rotations (for unequip reset)
+            [rightArm, rightForeArm, rightHand, leftArm, leftForeArm, leftHand].forEach(b => {
+                if (b) restRotations[b.name] = b.rotation.clone();
+            });
 
             // Scale and Position from USer Calibration
             gun.scale.set(76.0, 76.0, 76.0);
@@ -1090,14 +1145,21 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
                 rightForeArm: rightForeArm,
                 leftArm: leftArm,
                 leftForeArm: leftForeArm,
+                leftHand: leftHand,
                 spine: spine,
                 head: head, // For Pitch
                 leftLeg: leftLeg,
                 rightLeg: rightLeg,
                 aimBone: aimBone,
                 currentRecoil: 0,
+                currentRecoil: 0,
                 shootTimer: 0, // For animation
                 isMoving: false,
+                fingers: {
+                    rThumb, rIndex, rMiddle, rRing, rPinky,
+                    lThumb, lIndex, lMiddle, lRing, lPinky
+                },
+                restRotations: restRotations,
                 isDead: false,
                 actions: { idle: idleAction, run: runAction, walk: walkAction, death: deathAction, hit: hitAction },
                 activeAction: idleAction
@@ -1146,6 +1208,88 @@ const SFX_STEP = new Audio('sound-effect/Steps_dirt-017.ogg');
 // Volume Configuration
 const VOL_RUN = 0.26; // Drastically reduced
 const VOL_JUMP = 0.12; // Drastically reduced
+
+const CALIBRATION = {
+    // Pose when holding a gun (Applied to bones)
+    HOLDING_POSE: {
+        rightArm: { x: -1.033, y: -0.338, z: -0.164 },
+        rightForeArm: { x: -1.728, y: -2.134, z: 0 },
+        rightHand: { x: -0.048, y: -0.106, z: -1.265 },
+        leftArm: { x: -1.356, y: -0.161, z: 0.921 },
+        leftForeArm: { x: -0.957, y: 0, z: 0 },
+        leftHand: { x: -0.275, y: -0.445, z: 0.295 }
+    },
+    // Gun Transform on Back (Spine parent) -> Recovered from attachGunToBack
+    BACK_TRANSFORM: {
+        pos: new THREE.Vector3(-0.001, 0, -0.001),
+        rot: new THREE.Vector3(THREE.MathUtils.degToRad(-84), 0, 0),
+        scale: 0.025
+    },
+    // Gun Transform in Hand (Spine parent) -> From DB
+    HAND_TRANSFORM: {
+        pos: new THREE.Vector3(0, -0.0005, 0.002),
+        rot: new THREE.Vector3(THREE.MathUtils.degToRad(313.92), THREE.MathUtils.degToRad(-83.63), 0),
+        scale: 0.0285
+    },
+    FINGERS: {
+        rThumb: 0, rIndex: 0, rMiddle: 0, rRing: 0, rPinky: 0,
+        lThumb: 0, lIndex: 0, lMiddle: 0, lRing: 0, lPinky: 0
+    }
+};
+
+
+// Auto-Load Calibration
+(async function loadCalibration() {
+    try {
+        const res = await fetch('/api/calibration/sandbox');
+        const data = await res.json();
+        if (data && Object.keys(data).length > 0) {
+            console.log("Applying Calibration from DB:", data);
+
+            // Map Bone Rotations
+            const pose = CALIBRATION.HOLDING_POSE;
+            if (data.rArmX !== undefined) pose.rightArm = { x: data.rArmX, y: data.rArmY, z: data.rArmZ };
+            if (data.rForeArmX !== undefined) pose.rightForeArm = { x: data.rForeArmX, y: data.rForeArmY, z: data.rForeArmZ };
+            if (data.rHandX !== undefined) pose.rightHand = { x: data.rHandX, y: data.rHandY, z: data.rHandZ };
+
+            if (data.lArmX !== undefined) pose.leftArm = { x: data.lArmX, y: data.lArmY, z: data.lArmZ };
+            if (data.lForeArmX !== undefined) pose.leftForeArm = { x: data.lForeArmX, y: data.lForeArmY, z: data.lForeArmZ };
+            if (data.lForeArmX !== undefined) pose.leftForeArm = { x: data.lForeArmX, y: data.lForeArmY, z: data.lForeArmZ };
+            if (data.lHandX !== undefined) pose.leftHand = { x: data.lHandX, y: data.lHandY, z: data.lHandZ };
+
+            // Map Fingers
+            const f = CALIBRATION.FINGERS;
+            if (data.rThumbCurl !== undefined) f.rThumb = data.rThumbCurl;
+            if (data.rIndexCurl !== undefined) f.rIndex = data.rIndexCurl;
+            if (data.rMiddleCurl !== undefined) f.rMiddle = data.rMiddleCurl;
+            if (data.rRingCurl !== undefined) f.rRing = data.rRingCurl;
+            if (data.rPinkyCurl !== undefined) f.rPinky = data.rPinkyCurl;
+
+            if (data.lThumbCurl !== undefined) f.lThumb = data.lThumbCurl;
+            if (data.lIndexCurl !== undefined) f.lIndex = data.lIndexCurl;
+            if (data.lMiddleCurl !== undefined) f.lMiddle = data.lMiddleCurl;
+            if (data.lRingCurl !== undefined) f.lRing = data.lRingCurl;
+            if (data.lPinkyCurl !== undefined) f.lPinky = data.lPinkyCurl;
+
+            // Map Gun Transform (HAND TRANSFORM for Equipped State)
+            // Note: Sandbox usually calibrated with Parent=RightHand or Spine.
+            // game.js forces Parent=Spine.
+            // If user calibrated with Parent=Spine in Sandbox, these coordinates are correct.
+            const hand = CALIBRATION.HAND_TRANSFORM;
+            if (data.gx !== undefined) hand.pos.set(data.gx, data.gy, data.gz);
+            if (data.grx !== undefined) hand.rot.set(
+                THREE.MathUtils.degToRad(data.grx),
+                THREE.MathUtils.degToRad(data.gry),
+                THREE.MathUtils.degToRad(data.grz)
+            );
+            if (data.scale !== undefined) hand.scale = data.scale;
+
+            console.log("Calibration Applied Successfully.");
+        }
+    } catch (e) {
+        console.warn("Failed to load calibration:", e);
+    }
+})();
 
 function playSound(audioSource, volume) {
     const s = audioSource.cloneNode();
@@ -1301,6 +1445,25 @@ function updateCharacterAnimation(mesh, dt, time) {
     }
     */
 
+    // --- WEAPON POSTURE (Overrides) ---
+    if (ud.equippedSlot !== undefined && ud.equippedSlot !== null) {
+        const pose = CALIBRATION.HOLDING_POSE;
+
+        const applyRot = (boneName, mapKey) => {
+            if (ud[boneName]) {
+                const e = pose[mapKey];
+                ud[boneName].rotation.set(e.x, e.y, e.z);
+            }
+        };
+
+        applyRot('rightArm', 'rightArm');
+        applyRot('rightForeArm', 'rightForeArm');
+        applyRot('rightHand', 'rightHand');
+        applyRot('leftArm', 'leftArm');
+        applyRot('leftForeArm', 'leftForeArm');
+        applyRot('leftHand', 'leftHand');
+    }
+
     // --- PROCEDURAL SHOOTING ANIMATION ---
     if (ud.shootTimer > 0) {
         ud.shootTimer -= dt;
@@ -1329,8 +1492,102 @@ function updateCharacterAnimation(mesh, dt, time) {
         ud.spine.rotation.y = 0.4; // Twist right
         ud.spine.rotation.z = 0;
     }
- 
-    /* DISABLED: Manual bone overrides removed. Animation Mixer handles everything now. */
+    */
+
+
+}
+
+// --- WEAPON SYSTEM ---
+function toggleWeapon(slot) {
+    if (!myPlayerMesh || myPlayerMesh.userData.isDead) return;
+
+    const ud = myPlayerMesh.userData;
+    // Check if we have a weapon in that slot
+    if (!ud.backGuns || !ud.backGuns[slot]) return;
+
+    if (ud.equippedSlot === slot) {
+        unequipWeapon(); // Holster
+    } else {
+        equipWeapon(slot);
+    }
+}
+
+function unequipWeapon() {
+    const ud = myPlayerMesh.userData;
+    if (ud.equippedSlot === null || ud.equippedSlot === undefined) return;
+
+    const slot = ud.equippedSlot;
+    const gunMesh = ud.backGuns[slot];
+
+    if (gunMesh && ud.spine) {
+        // Ensure attached to Spine
+        if (gunMesh.parent !== ud.spine) {
+            scene.remove(gunMesh);
+            ud.spine.add(gunMesh);
+        }
+
+        // Restore Back Transform
+        const cfg = CALIBRATION.BACK_TRANSFORM;
+        gunMesh.position.copy(cfg.pos);
+        gunMesh.rotation.setFromVector3(cfg.rot);
+        gunMesh.scale.setScalar(cfg.scale);
+
+        // Mirror for Slot 2 (Index 1)
+        if (slot === 1) {
+            // Exact match to attachGunToBack logic (Mirror X)
+            gunMesh.position.set(-cfg.pos.x, cfg.pos.y, cfg.pos.z);
+        } else { // slot 0
+            gunMesh.position.copy(cfg.pos);
+        }
+    }
+
+    ud.equippedSlot = null;
+    isFiring = false;
+
+    // Reset rotations to prevent stuck posture
+    const resetBone = (b) => {
+        if (b && ud.restRotations && ud.restRotations[b.name]) {
+            b.rotation.copy(ud.restRotations[b.name]);
+        } else if (b) {
+            b.rotation.set(0, 0, 0); // Fallback
+        }
+    };
+    resetBone(ud.rightArm);
+    resetBone(ud.rightForeArm);
+    resetBone(ud.rightHand);
+    resetBone(ud.leftArm);
+    resetBone(ud.leftForeArm);
+    resetBone(ud.leftHand);
+
+    console.log("Holstered Weapon");
+}
+
+function equipWeapon(slot) {
+    unequipWeapon(); // Ensure nothing else is held
+
+    const ud = myPlayerMesh.userData;
+    const gunMesh = ud.backGuns[slot];
+
+    if (gunMesh && ud.spine) {
+        // KEEP ATTACHED TO SPINE (As requested)
+        // If not already on spine (should be from unequip), re-attach
+        if (gunMesh.parent !== ud.spine) {
+            scene.remove(gunMesh);
+            ud.spine.add(gunMesh);
+        }
+
+        // Apply Hand Transform
+        const cfg = CALIBRATION.HAND_TRANSFORM;
+        gunMesh.position.copy(cfg.pos);
+        gunMesh.rotation.setFromVector3(cfg.rot);
+        gunMesh.scale.setScalar(cfg.scale);
+
+        // Fix Gimbal Lock
+        gunMesh.rotation.order = 'YXZ';
+
+        ud.equippedSlot = slot;
+        console.log(`Equipped Weapon ${slot + 1}`);
+    }
 }
 
 function createBullet(isLocal = false, shooter = null) {
@@ -1414,7 +1671,22 @@ function animate() {
 
     // Auto-Fire Check
     if (isFiring) {
-        attemptShoot();
+        // Enforce Weapon Equipped
+        if (!myPlayerMesh || myPlayerMesh.userData.equippedSlot === null || myPlayerMesh.userData.isDead) {
+            isFiring = false;
+        } else {
+            attemptShoot();
+        }
+    }
+
+    // Toggle Weapons
+    if (keys['1']) {
+        toggleWeapon(0);
+        keys['1'] = false; // Single Trigger
+    }
+    if (keys['2']) {
+        toggleWeapon(1);
+        keys['2'] = false;
     }
 
     window.frames = (window.frames || 0) + 1;
@@ -1547,35 +1819,47 @@ function animate() {
         }
 
         // Apply Rotation
-        if (hasInput) {
-            // Face Movement Direction
-            // Target Rotation = Camera Yaw + Offset + 180 (Math.PI) to face away
-            const targetRotation = cameraYaw + angleOffset + Math.PI;
+        if (window.isCalibrationMode) {
+            if (window.updateCalibration) window.updateCalibration();
+            // In calibration mode, we let OrbitControls handle camera.
+            // We still update player model animations below.
 
-            // Smooth Rotation (Lerp)
-            // Fix circular wrapping (PI to -PI)
-            // For MVP, just snap or simple lerp
-            let diff = targetRotation - myPlayerMesh.rotation.y;
-            // Normalize diff to -PI...PI
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-
-            myPlayerMesh.rotation.y += diff * 0.2 * timeScale; // 20% smooth factor
+            // Keep yawObject following player so when we exit, we are at right spot
+            yawObject.position.copy(myPlayerMesh.position);
+            yawObject.position.y += 1.6;
         } else {
-            // If idle, align with camera (Back to Camera)
-            // Target = Camera Yaw + 180 (Math.PI)
-            const targetRot = cameraYaw + Math.PI;
-            let diff = targetRot - myPlayerMesh.rotation.y;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
+            // Apply Rotation
+            if (hasInput) {
+                // ... normal rotation logic ...
+                // Face Movement Direction
+                // Target Rotation = Camera Yaw + Offset + 180 (Math.PI) to face away
+                const targetRotation = cameraYaw + angleOffset + Math.PI;
 
-            myPlayerMesh.rotation.y += diff * 0.1 * timeScale; // 10% smooth factor
+                // Smooth Rotation (Lerp)
+                // Fix circular wrapping (PI to -PI)
+                // For MVP, just snap or simple lerp
+                let diff = targetRotation - myPlayerMesh.rotation.y;
+                // Normalize diff to -PI...PI
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+
+                myPlayerMesh.rotation.y += diff * 0.2 * timeScale; // 20% smooth factor
+            } else {
+                // If idle, align with camera (Back to Camera)
+                // Target = Camera Yaw + 180 (Math.PI)
+                const targetRot = cameraYaw + Math.PI;
+                let diff = targetRot - myPlayerMesh.rotation.y;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+
+                myPlayerMesh.rotation.y += diff * 0.1 * timeScale; // 10% smooth factor
+            }
+
+            // Camera Follows Player Position
+            yawObject.position.x = myPlayerMesh.position.x;
+            yawObject.position.y = myPlayerMesh.position.y + 1.6; // Eye Height
+            yawObject.position.z = myPlayerMesh.position.z;
         }
-
-        // Camera Follows Player Position
-        yawObject.position.x = myPlayerMesh.position.x;
-        yawObject.position.y = myPlayerMesh.position.y + 1.6; // Eye Height
-        yawObject.position.z = myPlayerMesh.position.z;
 
         // 3. Apply Velocity
         let baseSpeed = 0.1;
