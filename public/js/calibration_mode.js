@@ -60,7 +60,7 @@ window.initCalibrationMode = function () {
     fGun.add(gunRotHelper, 'rx', -360, 360).step(0.1).name('Rot X');
     fGun.add(gunRotHelper, 'ry', -360, 360).step(0.1).name('Rot Y');
     fGun.add(gunRotHelper, 'rz', -360, 360).step(0.1).name('Rot Z');
-    fGun.add(hand, 'scale', 0.01, 2.0).step(0.0001).name('Scale');
+    fGun.add(hand, 'scale', -1.0, 1.0).step(0.0001).name('Scale');
     fGun.open();
 
     // --- FOLDER: ARMS ---
@@ -104,10 +104,11 @@ window.initCalibrationMode = function () {
             };
 
             try {
+                const type = CALIBRATION.currentType || 'MPSD';
                 const res = await fetch('/api/calibration', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ type: 'sandbox', data: data })
+                    body: JSON.stringify({ type: type, data: data })
                 });
                 const json = await res.json();
                 if (json.success) alert("Saved to Database!");

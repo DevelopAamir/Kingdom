@@ -1,11 +1,12 @@
 // --- GLOBAL VARIABLES ---
 let camera, scene, renderer;
-let socket = io(); // Connect immediately to handle Auth
+
+Network.init(); // Initialize Network
 let myPlayerMesh;
 let otherPlayers = {};
 let bullets = [];
 let damagePopups = []; // Floating numbers
-let keys = { w: false, a: false, s: false, d: false };
+// let keys = ... removed (Controls.js)
 
 // Blood System
 window.bloodParticles = [];
@@ -33,11 +34,8 @@ function spawnBlood(pos) {
 }
 
 // Drops & Items
-const GUN_ASSETS = {
-    'MPSD': 'guns/Mpsd.glb',
-    'Sniper': 'guns/Sniper Rifle.glb'
-};
-let worldItems = []; // Array of { mesh, type, collider }
+
+window.worldItems = []; // Array of { mesh, type, collider }
 
 // Variables for Controls
 let pitchObject, yawObject;
@@ -95,57 +93,17 @@ function toggleCamera() {
 function doSignup() {
     const user = document.getElementById('username').value;
     const pass = document.getElementById('password').value;
-    socket.emit('signup', { username: user, password: pass });
+    Network.signup(user, pass);
 }
 
 function doLogin() {
     const user = document.getElementById('username').value;
     const pass = document.getElementById('password').value;
     const model = document.getElementById('char-select').value;
-    socket.emit('login', { username: user, password: pass, model: model });
+    Network.login(user, pass, model);
 }
 
-socket.on('authError', (data) => {
-    document.getElementById('auth-msg').innerText = data.message;
-});
-
-socket.on('authSuccess', (data) => {
-    document.getElementById('auth-msg').style.color = "lightgreen";
-    document.getElementById('auth-msg').innerText = data.message;
-});
-
-socket.on('loginSuccess', (data) => {
-    // data.player contains my starting stats
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('ui-layer').style.display = 'block';
-
-    // Pointer Lock Setup
-    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (!isMobile) {
-        document.body.requestPointerLock = document.body.requestPointerLock || document.body.mozRequestPointerLock;
-        document.addEventListener('pointerlockchange', () => {
-            if (document.pointerLockElement === document.body) {
-                document.getElementById('pause-screen').style.display = 'none';
-            } else {
-                // Check if logged in before showing pause
-                // Check if logged in before showing pause
-                if (document.getElementById('ui-layer').style.display === 'block' && !window.isCalibrationMode) {
-                    document.getElementById('pause-screen').style.display = 'flex';
-                }
-            }
-        });
-    } else {
-        // Should we hide it here just in case?
-        document.getElementById('pause-screen').style.display = 'none';
-    }
-
-    // Start in "Paused" state so user clicks to capture mouse (PC only)
-    if (!isMobile) {
-        document.getElementById('pause-screen').style.display = 'flex';
-    }
-
-    initGame(data.player);
-});
+// Listeners moved to Network.js
 
 // --- TEXTURE GENERATOR ---
 function generateGrassTexture() {
@@ -170,96 +128,15 @@ function generateGrassTexture() {
 }
 
 // --- ITEM SPAWNER ---
-function spawnWorldGun(type, pos) {
-    const url = GUN_ASSETS[type];
-    if (!url) return;
-
-    loader.load(url, (gltf) => {
-        const mesh = gltf.scene;
-        // Scale might need tuning per model. 
-        // Assuming they are "real scale", 1.0 might be handled.
-        // Let's make them slightly large to be noticeable.
-        mesh.scale.set(1.5, 1.5, 1.5);
-
-        mesh.position.copy(pos);
-        mesh.position.y = 0.5; // Float
-
-        // Add to scene
-        scene.add(mesh);
-
-        // Track
-        mesh.userData.isPickup = true;
-        mesh.userData.pickupType = type;
-        mesh.userData.floatPhase = Math.random() * Math.PI * 2;
-
-        worldItems.push(mesh);
-    });
-}
 
 
 
-function attachGunToBack(player, gunMesh) {
-    const ud = player.userData;
-    if (!ud.backGuns) ud.backGuns = [];
 
-    if (ud.spine) {
-        // Remove from world scene, attach to spine bone
-        scene.remove(gunMesh);
-        ud.spine.add(gunMesh);
 
-        const count = ud.backGuns.length;
-        const type = gunMesh.userData.pickupType || 'Default';
-
-        // --- CALIBRATION DATA ---
-        // Default (Sniper / Others)
-        let config = {
-            pos: new THREE.Vector3(-0.001, 0.000, -0.001),
-            rot: new THREE.Vector3(0, Math.PI, Math.PI / 4),
-            scale: 0.0015
-        };
-
-        if (type === 'MPSD') {
-            // USER CALIBRATED VALUES
-            // gx: -0.14, gy: 1.42, gz: -0.03
-            // Rot: -84, 0, 0
-            config.pos.set(-0.001, 0.000, -0.001);
-            config.rot.set(THREE.MathUtils.degToRad(-84), 0, 0);
-            config.scale = 0.025;
-        }
-
-        // Apply Scale
-        gunMesh.scale.set(config.scale, config.scale, config.scale);
-
-        // Position based on Slot
-        if (count === 0) {
-            // Slot 1
-            gunMesh.position.copy(config.pos);
-            gunMesh.rotation.setFromVector3(config.rot);
-        } else {
-            // Slot 2 (Second Gun)
-            if (type === 'MPSD') {
-                // For MPSD, Mirror across X axis (Left Shoulder vs Right Shoulder?)
-                // Assuming X=-0.14 is one side, X=0.14 would be other.
-                gunMesh.position.set(-config.pos.x, config.pos.y, config.pos.z);
-
-                // Rotation: If vertical, same rotation is fine.
-                // If it needs to be mirrored, we might need to tweak. 
-                // For now, use same rotation as Slot 1.
-                gunMesh.rotation.setFromVector3(config.rot);
-            } else {
-                // Default Cross Logic (Sniper)
-                gunMesh.position.set(-config.pos.x, config.pos.y, config.pos.z);
-                gunMesh.rotation.setFromVector3(config.rot);
-            }
-        }
-
-        ud.backGuns.push(gunMesh);
-    }
-}
 
 // --- INITIALIZATION ---
 function initGame(playerData) {
-    // socket is already init
+    // socket is handled by Network
     // Player is already logged in SERVER side
 
     // Update UI
@@ -354,478 +231,12 @@ function initGame(playerData) {
         window.enemyStepBuffer = buffer;
     });
 
-    // 7. Network Listeners
-    socket.on('currentPlayers', (serverPlayers) => {
-        Object.keys(serverPlayers).forEach((id) => {
-            // Wait, serverPlayers[id] has { model: '...' } now?
-            if (id !== socket.id) addEnemy(id, serverPlayers[id]);
-        });
-    });
-
-    socket.on('newPlayer', (data) => addEnemy(data.id, data.player));
-
-    socket.on('playerMoved', (data) => {
-        if (otherPlayers[data.id]) {
-            const op = otherPlayers[data.id];
-            if (op.userData && op.userData.isDead) return; // Don't update pos/rot if dead (preserve death anim)
-
-            // Weapon Sync
-            if (data.equippedSlot !== op.userData.equippedSlot) {
-                // Determine if valid slot
-                if (data.equippedSlot !== null && data.equippedSlot !== undefined) {
-                    equipWeapon(data.equippedSlot, op);
-                } else {
-                    unequipWeapon(op);
-                }
-            }
-
-            op.position.set(data.x, data.y, data.z);
-            otherPlayers[data.id].rotation.y = data.rotation;
-
-            // Apply Pitch to parts
-            const ud = otherPlayers[data.id].userData;
-            if (ud && data.pitch !== undefined) {
-                // Pitch affects Head and Arms
-                // Note: Arms are rotated by default for "Aim" (-Math.PI/2) etc.
-                if (ud.head) ud.head.rotation.x = data.pitch;
-                if (ud.rightArm) ud.rightArm.rotation.x = -Math.PI / 2 + data.pitch;
-                if (ud.leftArm) ud.leftArm.rotation.x = -Math.PI / 3 + data.pitch; // Adjust supporting arm
-            }
-        }
-    });
-
-    socket.on('playerShoot', (data) => {
-        if (otherPlayers[data.id]) {
-            // Trigger Animation
-            if (otherPlayers[data.id].userData) {
-                otherPlayers[data.id].userData.shootTimer = 0.1;
-                // Add recoil to currentRecoil for smooth fallback? 
-                // Using procedural loop for spine, so just shootTimer is enough for Flash/Spine kick.
-                // But if we want arm kick, we might need currentRecoil too.
-                if (!otherPlayers[data.id].userData.currentRecoil) otherPlayers[data.id].userData.currentRecoil = 0;
-                otherPlayers[data.id].userData.currentRecoil += 0.2;
-            }
-
-            // Fix: Pass false for isLocal, and the mesh object as shooter
-            createBullet(false, otherPlayers[data.id]);
-        }
-    });
-
-    socket.on('playerDisconnected', (id) => {
-        if (otherPlayers[id]) {
-            scene.remove(otherPlayers[id]);
-            delete otherPlayers[id];
-        }
-    });
-
-    socket.on('updateHealth', (hp) => {
-        updateHealthUI(hp);
-        // If Health > 0, we are alive. Hide death screen.
-        if (hp > 0) {
-            document.getElementById('death-screen').style.display = 'none';
-        }
-    });
-
-    let deathScreenTimeout = null;
-
-    socket.on('youDied', (data) => {
-        updateInventoryUI([]); // clear inv
-
-        // --- LOCAL DEATH ANIMATION ---
-        const p = myPlayerMesh;
-        if (p && p.userData) {
-            console.log("Local Player Died (youDied Event). Playing Anim...");
-            p.userData.isDead = true;
-
-            // Force TPP
-            if (isFirstPerson) toggleCamera();
-
-            // Stop All Actions
-            if (p.mixer) p.mixer.stopAllAction();
-
-            if (p.userData.actions && p.userData.actions.death) {
-                const action = p.userData.actions.death;
-                action.reset();
-                action.setEffectiveTimeScale(1);
-                action.setEffectiveWeight(1);
-                action.setLoop(THREE.LoopOnce);
-                action.clampWhenFinished = true;
-                action.play();
-                p.userData.activeAction = action;
-            } else {
-                console.log("No Death Animation. Falling back to rotation.");
-                // Fallback: Rotate -90 degrees on X to lie down
-                // We need to rotate the MESH or a parent? 
-                // mesh.rotation is used for looking direction.
-                // We can rotate on X.
-                p.rotation.x = -Math.PI / 2;
-                p.position.y = 0.5; // Adjust height so not underground
-            }
-
-            // Force Ground
-            p.position.y = 0;
-            p.userData.velocityY = 0;
-        }
-
-        // Delay screen to let death animation play
-        clearTimeout(deathScreenTimeout);
-        deathScreenTimeout = setTimeout(() => {
-            document.getElementById('death-screen').style.display = 'flex';
-        }, 2500); // 2.5 Seconds Delay for full animation
-    });
-
-    // Helper function for damage popups
-    function spawnDamagePopup(worldPos, damage) {
-        // Project to 2D screen space
-        const screenPos = worldPos.clone().project(camera);
-
-        // Convert to CSS coordinates
-        const x = (screenPos.x * .5 + .5) * window.innerWidth;
-        const y = (-(screenPos.y * .5) + .5) * window.innerHeight;
-
-        // Create HTML Element
-        const div = document.createElement('div');
-        div.className = 'damage-popup';
-        div.innerText = damage || "10"; // Default to 10 if missing
-        div.style.left = x + 'px';
-        div.style.top = y + 'px';
-        document.getElementById('ui-layer').appendChild(div);
-
-        // Cleanup after animation (1s)
-        setTimeout(() => {
-            div.remove();
-        }, 1000);
-    }
-
-    socket.on('playerDied', (data) => {
-        // Ignore Self (Handled by youDied)
-        if (data.id === socket.id) return;
-
-        const p = otherPlayers[data.id];
-
-        if (p && p.userData) {
-            p.userData.isDead = true;
-
-            // Play Animation
-            if (p.userData.actions && p.userData.actions.death) {
-                const action = p.userData.actions.death;
-
-                if (p.mixer) p.mixer.stopAllAction(); // Assuming remote players have mixers? Yes.
-
-                action.reset();
-                action.setEffectiveTimeScale(1);
-                action.setEffectiveWeight(1);
-                action.setLoop(THREE.LoopOnce);
-                action.clampWhenFinished = true;
-                action.play();
-                p.userData.activeAction = action;
-            } else {
-                // Fallback for Remote Players
-                p.rotation.x = -Math.PI / 2;
-                p.position.y = 0.5;
-            }
-
-            // Force Ground
-            p.position.y = 0;
-            p.userData.velocityY = 0;
-        }
-    });
-
-    socket.on('playerRespawn', (data) => {
-        const id = data.id;
-        let p = (id === socket.id) ? myPlayerMesh : otherPlayers[id];
-
-        if (p) {
-            p.userData.isDead = false;
-            p.userData.velocityY = 0;
-
-            // Reset Transforms
-            p.position.set(data.x, data.y, data.z);
-            p.rotation.x = 0;
-            p.rotation.z = 0;
-
-            // Reset Animation
-            const actions = p.userData.actions;
-            if (actions) {
-                // Stop Death
-                if (actions.death) actions.death.stop();
-                if (actions.run) actions.run.stop();
-
-                // Play Idle
-                if (actions.idle) {
-                    actions.idle.reset().play();
-                    p.userData.activeAction = actions.idle;
-                }
-            }
-        }
-
-        // Local Player UI Reset
-        if (id === socket.id) {
-            clearTimeout(deathScreenTimeout);
-            document.getElementById('death-screen').style.display = 'none';
-            lastHealth = 100;
-        }
-    });
-
-    socket.on('playerDamaged', (data) => {
-        const id = data.id;
-        const damage = data.damage;
-        let pos = new THREE.Vector3();
-
-        // Helper for Hit Anim
-        const playHit = (mesh) => {
-            // FIX: Don't play hit anim if running (User Request)
-            if (mesh.userData.isMoving) return;
-
-            if (mesh.userData && mesh.userData.actions && mesh.userData.actions.hit && !mesh.userData.isDead) {
-                // Set Hit State Timer (duration of clip)
-                const clip = mesh.userData.actions.hit.getClip();
-                mesh.userData.hitTimer = clip.duration;
-            }
-        };
-
-        if (id === socket.id && myPlayerMesh) {
-            pos.copy(myPlayerMesh.position);
-            updateHealthUI(data.health);
-
-            // Only play hit anim if still alive
-            if (data.health > 0) playHit(myPlayerMesh);
-
-            // Flash Red Vignette
-            const overlay = document.getElementById('damage-overlay');
-            if (overlay) {
-                overlay.style.opacity = '1';
-                setTimeout(() => {
-                    overlay.style.opacity = '0';
-                }, 300);
-            }
-        } else if (otherPlayers[id]) {
-            const enemy = otherPlayers[id];
-            pos.copy(enemy.position);
-
-            // Only play hit anim if still alive
-            if (data.health > 0) playHit(enemy);
-
-            // Spawn Blood
-            spawnBlood(enemy.position);
-
-            // Flash Red for enemy
-            enemy.traverse((child) => {
-                if (child.isMesh && child.material) {
-                    child.material.emissive.setHex(0xff0000);
-                }
-            });
-
-            setTimeout(() => {
-                if (otherPlayers[data.id]) {
-                    enemy.traverse((child) => {
-                        if (child.isMesh && child.material) {
-                            child.material.emissive.setHex(0x000000);
-                        }
-                    });
-                }
-            }, 100);
-
-            // 2. Show Floating Damage Text
-            // Calculate screen position
-            // Clone pos to avoid messing up player
-            const popupPos = enemy.position.clone();
-            popupPos.y += 2.0; // Above head
-
-            // Project to 2D screen space
-            popupPos.project(camera);
-
-            // Convert to CSS coordinates
-            const x = (popupPos.x * .5 + .5) * window.innerWidth;
-            const y = (-(popupPos.y * .5) + .5) * window.innerHeight;
-
-            // Create HTML Element
-            const div = document.createElement('div');
-            div.className = 'damage-popup';
-            div.innerText = data.damage || "10"; // Default to 10 if missing
-            div.style.left = x + 'px';
-            div.style.top = y + 'px';
-            document.getElementById('ui-layer').appendChild(div);
-
-            // 2. Show Floating Damage Text
-            // ... (existing code) ...
-
-            // 3. Spawn Blood Particles (Already Called above at line 406)
-
-            // Cleanup after animation (1s)
-            setTimeout(() => {
-                div.remove();
-            }, 1000);
-        }
-    });
+    // 7. Network Listeners moved to Network.js
 
     // Blood System moved to Global Scope
 
-    // Inputs
-    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-
-    // Mobile specific setup: Hide pause screen (no pointer lock needed)
-    if (isMobile) {
-        document.getElementById('pause-screen').style.display = 'none';
-    }
-
-    if (isMobile) {
-        document.getElementById('mobile-controls').style.display = 'block';
-
-        // NIPPLE.JS
-        const manager = nipplejs.create({
-            zone: document.getElementById('joystick-zone'),
-            mode: 'static',
-            position: { left: '50%', top: '50%' },
-            color: 'white'
-        });
-
-        manager.on('move', (evt, data) => {
-            const forward = data.vector.y;
-            const turn = data.vector.x;
-
-            // Map to Keys for Movement logic
-            if (forward > 0.5) { keys['w'] = true; keys['s'] = false; }
-            else if (forward < -0.5) { keys['s'] = true; keys['w'] = false; }
-            else { keys['w'] = false; keys['s'] = false; }
-
-            if (turn > 0.5) { keys['d'] = true; keys['a'] = false; }
-            else if (turn < -0.5) { keys['a'] = true; keys['d'] = false; }
-            else { keys['a'] = false; keys['d'] = false; }
-
-
-        });
-
-        manager.on('end', () => {
-            keys['w'] = false; keys['s'] = false;
-            keys['a'] = false; keys['d'] = false;
-        });
-
-        // Cancel Auto-Run on Joystick Touch
-        manager.on('start', () => {
-            isSprintToggled = false;
-            const runBtn = document.getElementById('run-btn');
-            if (runBtn) {
-                runBtn.style.background = 'rgba(255, 165, 0, 0.5)';
-                runBtn.style.border = '2px solid white';
-            }
-        });
-
-        // Multi-touch Look Logic
-        let lookTouchId = null;
-        let lastTouchX = 0;
-        let lastTouchY = 0;
-
-        document.addEventListener('touchstart', (e) => {
-            // Find a finger on the right side that is NOT the joystick (left)
-            // But we have fire button there too. 
-            // Fire button handles its own event and stops propagation? 
-            // Let's iterate.
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                const t = e.changedTouches[i];
-                // Right side of screen
-                // Right side of screen AND NOT the fire button (though button stops prop, we check zone)
-                // Actually, just check x > window.innerWidth / 2. The button has stopPropagation.
-                if (t.clientX > window.innerWidth / 2) {
-                    lookTouchId = t.identifier;
-                    lastTouchX = t.clientX;
-                    lastTouchY = t.clientY;
-                    break;
-                }
-            }
-        });
-
-        document.addEventListener('touchmove', (e) => {
-            if (lookTouchId !== null) {
-                for (let i = 0; i < e.changedTouches.length; i++) {
-                    const t = e.changedTouches[i];
-                    if (t.identifier === lookTouchId) {
-                        const dx = t.clientX - lastTouchX;
-                        const dy = t.clientY - lastTouchY;
-
-                        yawObject.rotation.y -= dx * 0.005;
-                        pitchObject.rotation.x -= dy * 0.005;
-                        pitchObject.rotation.x = Math.max(-0.5, Math.min(Math.PI / 3, pitchObject.rotation.x));
-
-                        lastTouchX = t.clientX;
-                        lastTouchY = t.clientY;
-                        break;
-                    }
-                }
-            }
-        });
-
-        document.addEventListener('touchend', (e) => {
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                if (e.changedTouches[i].identifier === lookTouchId) {
-                    lookTouchId = null;
-                }
-            }
-        });
-
-        // Fire Button
-        const fireBtn = document.getElementById('mobile-fire-btn');
-        if (fireBtn) {
-            fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); isFiring = true; });
-            fireBtn.addEventListener('touchend', (e) => { e.preventDefault(); isFiring = false; });
-        }
-
-        const jumpBtn = document.getElementById('jump-btn');
-        if (jumpBtn) {
-            jumpBtn.addEventListener('touchstart', (e) => { e.preventDefault(); keys[' '] = true; });
-            jumpBtn.addEventListener('touchend', (e) => { e.preventDefault(); keys[' '] = false; });
-        }
-
-        const runBtn = document.getElementById('run-btn');
-        if (runBtn) {
-            runBtn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                isSprintToggled = !isSprintToggled;
-                // Visual Feedback
-                runBtn.style.background = isSprintToggled ? 'rgba(200, 0, 0, 0.8)' : 'rgba(255, 165, 0, 0.5)';
-                runBtn.style.border = isSprintToggled ? '3px solid yellow' : '2px solid white';
-            });
-        }
-
-    } else {
-        document.addEventListener('mousemove', onMouseMove, false);
-        document.addEventListener('mousedown', (e) => {
-            if (document.pointerLockElement === document.body) isFiring = true;
-        }, false);
-        document.addEventListener('mouseup', () => isFiring = false, false);
-
-        document.addEventListener('keydown', (e) => {
-            keys[e.key.toLowerCase()] = true;
-
-            // Auto-Run Cancel on Manual Input (WASD)
-            if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase())) {
-                isSprintToggled = false;
-                const runBtn = document.getElementById('run-btn');
-                if (runBtn) {
-                    runBtn.style.background = 'rgba(255, 165, 0, 0.5)';
-                    runBtn.style.border = '2px solid white';
-                }
-            }
-
-            if (e.key.toLowerCase() === 'c') toggleCamera();
-            if (e.key === " ") keys[' '] = true; // Spacebar for jump
-
-            // Toggle Sprint
-            if (e.key === 'Shift') {
-                isSprintToggled = !isSprintToggled;
-                // Sync Mobile UI if exists (hybrid testing)
-                const runBtn = document.getElementById('run-btn');
-                if (runBtn) {
-                    runBtn.style.background = isSprintToggled ? 'rgba(200, 0, 0, 0.8)' : 'rgba(255, 165, 0, 0.5)';
-                    runBtn.style.border = isSprintToggled ? '3px solid yellow' : '2px solid white';
-                }
-            }
-        });
-        document.addEventListener('keyup', (e) => {
-            keys[e.key.toLowerCase()] = false;
-            if (e.key === " ") keys[' '] = false; // Spacebar for jump
-        });
-    }
+    // --- CONTROLS INIT ---
+    Controls.init(camera, yawObject, pitchObject);
 
     // Global Resize Listener (Mobile + PC)
     window.addEventListener('resize', () => {
@@ -860,7 +271,7 @@ function fireWeaponLogic() {
 
         const targetId = meshToId[hitObj.uuid];
         if (targetId) {
-            socket.emit('playerHit', { targetId: targetId, damage: 10 });
+            Network.sendHit(targetId, 10);
         }
     }
 }
@@ -890,54 +301,7 @@ const BONE_MAPPINGS = {
 };
 
 // Procedural Low-Poly AK47
-function createGun() {
-    const gunGroup = new THREE.Group();
 
-    const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 }); // Dark Metal
-    const woodMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Wood Brown
-
-    // 1. Stock (Wood)
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.4), woodMaterial);
-    stock.position.set(0, -0.05, -0.3);
-    gunGroup.add(stock);
-
-    // 2. Main Body (Metal)
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.4), darkMaterial);
-    body.position.set(0, 0, 0.1);
-    gunGroup.add(body);
-
-    // 3. Magazine (Metal, curved-ish look via rotation?)
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.15), darkMaterial);
-    mag.position.set(0, -0.2, 0.15);
-    mag.rotation.x = 0.2;
-    gunGroup.add(mag);
-
-    // 4. Barrel (Metal)
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.6), darkMaterial);
-    barrel.position.set(0, 0, 0.6);
-    gunGroup.add(barrel);
-
-    // 5. Handguard (Wood)
-    const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.3), woodMaterial);
-    handguard.position.set(0, -0.02, 0.4);
-    gunGroup.add(handguard);
-
-    // Muzzle Point
-    const muzzle = new THREE.Object3D();
-    muzzle.position.set(0, 0, 0.9);
-    gunGroup.add(muzzle);
-
-    // Muzzle Flash (Procedural)
-    const flashGeo = new THREE.ConeGeometry(0.1, 0.4, 8);
-    flashGeo.translate(0, 0.2, 0); // Pivot at base
-    flashGeo.rotateX(Math.PI / 2); // Point forward
-    const flashMat = new THREE.MeshBasicMaterial({ color: 0xFFFF00, transparent: true, opacity: 0.8 });
-    const flash = new THREE.Mesh(flashGeo, flashMat);
-    flash.visible = false;
-    muzzle.add(flash);
-
-    return { group: gunGroup, muzzle: muzzle, flash: flash };
-}
 
 // --- DAMAGE NUMBER LOGIC ---
 function spawnDamagePopup(position, damage) {
@@ -1245,87 +609,7 @@ const SFX_STEP = new Audio('sound-effect/Steps_dirt-017.ogg');
 const VOL_RUN = 0.26; // Drastically reduced
 const VOL_JUMP = 0.12; // Drastically reduced
 
-const CALIBRATION = {
-    // Pose when holding a gun (Applied to bones)
-    HOLDING_POSE: {
-        rightArm: { x: -1.033, y: -0.338, z: -0.164 },
-        rightForeArm: { x: -1.728, y: -2.134, z: 0 },
-        rightHand: { x: -0.048, y: -0.106, z: -1.265 },
-        leftArm: { x: -1.356, y: -0.161, z: 0.921 },
-        leftForeArm: { x: -0.957, y: 0, z: 0 },
-        leftHand: { x: -0.275, y: -0.445, z: 0.295 }
-    },
-    // Gun Transform on Back (Spine parent) -> Recovered from attachGunToBack
-    BACK_TRANSFORM: {
-        pos: new THREE.Vector3(-0.001, 0, -0.001),
-        rot: new THREE.Vector3(THREE.MathUtils.degToRad(-84), 0, 0),
-        scale: 0.025
-    },
-    // Gun Transform in Hand (Spine parent) -> From DB
-    HAND_TRANSFORM: {
-        pos: new THREE.Vector3(0, -0.0005, 0.002),
-        rot: new THREE.Vector3(THREE.MathUtils.degToRad(313.92), THREE.MathUtils.degToRad(-83.63), 0),
-        scale: 0.0285
-    },
-    FINGERS: {
-        rThumb: 0, rIndex: 0, rMiddle: 0, rRing: 0, rPinky: 0,
-        lThumb: 0, lIndex: 0, lMiddle: 0, lRing: 0, lPinky: 0
-    }
-};
 
-
-// Auto-Load Calibration
-(async function loadCalibration() {
-    try {
-        const res = await fetch('/api/calibration/sandbox');
-        const data = await res.json();
-        if (data && Object.keys(data).length > 0) {
-            console.log("Applying Calibration from DB:", data);
-
-            // Map Bone Rotations
-            const pose = CALIBRATION.HOLDING_POSE;
-            if (data.rArmX !== undefined) pose.rightArm = { x: data.rArmX, y: data.rArmY, z: data.rArmZ };
-            if (data.rForeArmX !== undefined) pose.rightForeArm = { x: data.rForeArmX, y: data.rForeArmY, z: data.rForeArmZ };
-            if (data.rHandX !== undefined) pose.rightHand = { x: data.rHandX, y: data.rHandY, z: data.rHandZ };
-
-            if (data.lArmX !== undefined) pose.leftArm = { x: data.lArmX, y: data.lArmY, z: data.lArmZ };
-            if (data.lForeArmX !== undefined) pose.leftForeArm = { x: data.lForeArmX, y: data.lForeArmY, z: data.lForeArmZ };
-            if (data.lForeArmX !== undefined) pose.leftForeArm = { x: data.lForeArmX, y: data.lForeArmY, z: data.lForeArmZ };
-            if (data.lHandX !== undefined) pose.leftHand = { x: data.lHandX, y: data.lHandY, z: data.lHandZ };
-
-            // Map Fingers
-            const f = CALIBRATION.FINGERS;
-            if (data.rThumbCurl !== undefined) f.rThumb = data.rThumbCurl;
-            if (data.rIndexCurl !== undefined) f.rIndex = data.rIndexCurl;
-            if (data.rMiddleCurl !== undefined) f.rMiddle = data.rMiddleCurl;
-            if (data.rRingCurl !== undefined) f.rRing = data.rRingCurl;
-            if (data.rPinkyCurl !== undefined) f.rPinky = data.rPinkyCurl;
-
-            if (data.lThumbCurl !== undefined) f.lThumb = data.lThumbCurl;
-            if (data.lIndexCurl !== undefined) f.lIndex = data.lIndexCurl;
-            if (data.lMiddleCurl !== undefined) f.lMiddle = data.lMiddleCurl;
-            if (data.lRingCurl !== undefined) f.lRing = data.lRingCurl;
-            if (data.lPinkyCurl !== undefined) f.lPinky = data.lPinkyCurl;
-
-            // Map Gun Transform (HAND TRANSFORM for Equipped State)
-            // Note: Sandbox usually calibrated with Parent=RightHand or Spine.
-            // game.js forces Parent=Spine.
-            // If user calibrated with Parent=Spine in Sandbox, these coordinates are correct.
-            const hand = CALIBRATION.HAND_TRANSFORM;
-            if (data.gx !== undefined) hand.pos.set(data.gx, data.gy, data.gz);
-            if (data.grx !== undefined) hand.rot.set(
-                THREE.MathUtils.degToRad(data.grx),
-                THREE.MathUtils.degToRad(data.gry),
-                THREE.MathUtils.degToRad(data.grz)
-            );
-            if (data.scale !== undefined) hand.scale = data.scale;
-
-            console.log("Calibration Applied Successfully.");
-        }
-    } catch (e) {
-        console.warn("Failed to load calibration:", e);
-    }
-})();
 
 function playSound(audioSource, volume) {
     const s = audioSource.cloneNode();
@@ -1333,8 +617,9 @@ function playSound(audioSource, volume) {
     s.play().catch(() => { });
 }
 
-let isFiring = false;
-let isSprintToggled = false; // Toggle state for Run
+// Controls managed by controls.js
+// let isFiring = false; 
+// let isSprintToggled = false; 
 let lastShotTime = 0;
 const FIRE_RATE = 0.15; // Seconds between shots
 
@@ -1355,7 +640,7 @@ function attemptShoot() {
 
         // Shoot locally (Visual)
         createBullet(true); // Fixed: Pass true for isLocal
-        socket.emit('shoot');
+        Network.sendShoot();
 
         // --- RAYCAST HIT DETECTION ---
         const raycaster = new THREE.Raycaster();
@@ -1389,7 +674,7 @@ function attemptShoot() {
                     spawnDamagePopup(intersects[0].point, 10);
                 }
 
-                socket.emit('playerHit', { targetId: targetId, damage: 10 });
+                Network.sendHit(targetId, 10);
             }
         }
     }
@@ -1533,176 +818,9 @@ function updateCharacterAnimation(mesh, dt, time) {
 
 }
 
-// --- WEAPON SYSTEM ---
-function toggleWeapon(slot) {
-    if (!myPlayerMesh || myPlayerMesh.userData.isDead) return;
 
-    const ud = myPlayerMesh.userData;
-    // Check if we have a weapon in that slot
-    if (!ud.backGuns || !ud.backGuns[slot]) return;
 
-    if (ud.equippedSlot === slot) {
-        unequipWeapon(myPlayerMesh); // Holster
-    } else {
-        equipWeapon(slot, myPlayerMesh);
-    }
-}
-
-function unequipWeapon(targetPlayer = myPlayerMesh) {
-    if (!targetPlayer) return;
-    const ud = targetPlayer.userData;
-    if (ud.equippedSlot === null || ud.equippedSlot === undefined) return;
-
-    const slot = ud.equippedSlot;
-    const gunMesh = ud.backGuns[slot];
-
-    if (gunMesh && ud.spine) {
-        // Ensure attached to Spine
-        if (gunMesh.parent !== ud.spine) {
-            scene.remove(gunMesh);
-            ud.spine.add(gunMesh);
-        }
-
-        // Restore Back Transform
-        const cfg = CALIBRATION.BACK_TRANSFORM;
-        gunMesh.position.copy(cfg.pos);
-        gunMesh.rotation.setFromVector3(cfg.rot);
-        gunMesh.scale.setScalar(cfg.scale);
-
-        // Mirror for Slot 2 (Index 1)
-        if (slot === 1) {
-            // Exact match to attachGunToBack logic (Mirror X)
-            gunMesh.position.set(-cfg.pos.x, cfg.pos.y, cfg.pos.z);
-        } else { // slot 0
-            gunMesh.position.copy(cfg.pos);
-        }
-    }
-
-    ud.equippedSlot = null;
-    if (targetPlayer === myPlayerMesh) isFiring = false;
-
-    // Reset rotations to prevent stuck posture
-    const resetBone = (b) => {
-        if (b && ud.restRotations && ud.restRotations[b.name]) {
-            b.rotation.copy(ud.restRotations[b.name]);
-        } else if (b) {
-            b.rotation.set(0, 0, 0); // Fallback
-        }
-    };
-    resetBone(ud.rightArm);
-    resetBone(ud.rightForeArm);
-    resetBone(ud.rightHand);
-    resetBone(ud.leftArm);
-    resetBone(ud.leftForeArm);
-    resetBone(ud.leftHand);
-
-    console.log("Holstered Weapon");
-}
-
-function equipWeapon(slot, targetPlayer = myPlayerMesh) {
-    unequipWeapon(targetPlayer); // Ensure nothing else is held
-
-    if (!targetPlayer) return;
-    const ud = targetPlayer.userData;
-
-    if (!ud.backGuns) return;
-
-    const gunMesh = ud.backGuns[slot];
-
-    if (gunMesh && ud.spine) {
-        // KEEP ATTACHED TO SPINE (As requested)
-        // If not already on spine (should be from unequip), re-attach
-        if (gunMesh.parent !== ud.spine) {
-            scene.remove(gunMesh);
-            ud.spine.add(gunMesh);
-        }
-
-        // Apply Hand Transform
-        const cfg = CALIBRATION.HAND_TRANSFORM;
-        gunMesh.position.copy(cfg.pos);
-        gunMesh.rotation.setFromVector3(cfg.rot);
-        gunMesh.scale.setScalar(cfg.scale);
-
-        // Fix Gimbal Lock
-        gunMesh.rotation.order = 'YXZ';
-
-        ud.equippedSlot = slot;
-        if (targetPlayer === myPlayerMesh) console.log(`Equipped Weapon ${slot + 1}`);
-    }
-}
-
-function createBullet(isLocal = false, shooter = null) {
-    const bullet = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 6, 6),
-        new THREE.MeshBasicMaterial({ color: 0xffff00 })
-    );
-
-    let startPos = new THREE.Vector3();
-    let direction = new THREE.Vector3();
-
-    if (isLocal) {
-        // 1. Get Gun Muzzle Position (World)
-        if (myPlayerMesh && myPlayerMesh.userData && myPlayerMesh.userData.muzzle) {
-            myPlayerMesh.userData.muzzle.getWorldPosition(startPos);
-        } else {
-            // Fallback
-            camera.getWorldPosition(startPos);
-        }
-
-        // 2. Find Target Direction (Ray from Camera Center)
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-
-        // Point far away
-        const targetPoint = new THREE.Vector3();
-        raycaster.ray.at(100, targetPoint);
-
-        // 3. Direction = Target - Muzzle
-        direction.subVectors(targetPoint, startPos).normalize();
-
-    } else if (shooter) {
-        // Enemy shooting
-        if (shooter.userData && shooter.userData.muzzle) {
-            shooter.userData.muzzle.getWorldPosition(startPos);
-
-            // Use Shooter's rotation Y
-            const theta = shooter.rotation.y + Math.PI;
-            direction.set(Math.sin(theta), 0, Math.cos(theta));
-        } else {
-            // Fallback
-            startPos.copy(shooter.position);
-            startPos.y += 1.4;
-            shooter.getWorldDirection(direction);
-        }
-    } else {
-        return; // invalid call
-    }
-
-    bullet.position.copy(startPos);
-    bullet.userData.velocity = direction.multiplyScalar(1.6); // Fast bullet
-
-    scene.add(bullet);
-    bullets.push(bullet);
-
-    setTimeout(() => {
-        scene.remove(bullet);
-        bullets = bullets.filter(b => b !== bullet);
-    }, 2000);
-}
-
-function onMouseMove(event) {
-    if (document.pointerLockElement === document.body) {
-        yawObject.rotation.y -= event.movementX * 0.002;
-        pitchObject.rotation.x -= event.movementY * 0.002;
-
-        // Clamp Pitch to prevent ground clipping
-        // -Math.PI/2 is straight up. Math.PI/2 is straight down.
-        // If camera.position.z is 6, at 45 deg down, Y drops significantly.
-        // Let's restrict looking UP too much if it clips, or just clamp generally.
-        // A tighter clamp is usually better for TPS.
-        pitchObject.rotation.x = Math.max(-0.5, Math.min(Math.PI / 3, pitchObject.rotation.x));
-    }
-}
+// onMouseMove removed (Moved to Controls.js)
 
 // Time Tracking
 let lastTime = performance.now();
@@ -1711,24 +829,21 @@ function animate() {
     requestAnimationFrame(animate);
 
     // Auto-Fire Check
-    if (isFiring) {
+    if (Controls.isFiring) {
         // Enforce Weapon Equipped
         if (!myPlayerMesh || myPlayerMesh.userData.equippedSlot === null || myPlayerMesh.userData.isDead) {
-            isFiring = false;
+            // Controls.isFiring = false; // Should we force reset? Maybe not.
         } else {
             attemptShoot();
         }
     }
 
     // Toggle Weapons
-    if (keys['1']) {
-        toggleWeapon(0);
-        keys['1'] = false; // Single Trigger
-    }
-    if (keys['2']) {
-        toggleWeapon(1);
-        keys['2'] = false;
-    }
+    // Toggle Weapons handled in Controls onKeyDown for 1/2
+    // But animate loop logic for 'Single Trigger' was checking keys['1']. 
+    // Controls handles the event calls directly. So we can remove this block.
+    // Or if we need single frame trigger, we should trust `toggleWeapon` called from `onKeyDown`.
+    // Validated: onKeyDown calls `toggleWeapon`. This polling block is invalid now.
 
     window.frames = (window.frames || 0) + 1;
 
@@ -1814,25 +929,27 @@ function animate() {
         // 1. Sync Model to Camera (DEFAULT)
         // We now decouple rotation if moving
 
-        // 2. Movement Inputs
-        let moveForward = keys['w'];
+        // 2. Movement Inputs (From Controls)
+        const input = Controls.getMovementDirection(); // returns {w,a,s,d,space,shift}
+
+        let moveForward = input.w;
 
         // FIX: Disable movement if dead
         if (myPlayerMesh.userData.isDead) {
             moveForward = false;
-            isSprintToggled = false; // Cancel auto-run
-            // Force others false for local variables (keys object remains touched but we override vars)
-            keys['s'] = false;
-            keys['a'] = false;
-            keys['d'] = false;
-        }
-        else if (isSprintToggled) {
-            moveForward = true; // Auto-Run / Run-Lock
         }
 
-        const moveBackward = keys['s'];
-        const moveLeft = keys['a'];
-        const moveRight = keys['d'];
+        const moveBackward = input.s;
+        const moveLeft = input.a;
+        const moveRight = input.d;
+        const isSprint = input.shift;
+
+        // Wait, input.shift includes toggle logic from Controls? Yes we updated it.
+        // Actually Controls.getMovementDirection().shift is based on Key Shift OR Toggle.
+
+        // Override Sprint variable locally
+        isSprintToggled = isSprint; // Keep game var in sync if used elsewhere
+
         const isMoving = moveForward || moveBackward || moveLeft || moveRight;
 
         // Calculate Camera Yaw
@@ -1945,7 +1062,7 @@ function animate() {
 
                     // Sync Inventory to Server
                     const inv = myPlayerMesh.userData.backGuns.map(g => g.userData.pickupType || 'Default');
-                    socket.emit('updateInventory', inv);
+                    Network.sendInventory(inv);
 
                     // Simple Feedback Log
                     console.log("Picked up " + item.userData.pickupType);
@@ -1991,7 +1108,8 @@ function animate() {
         }
 
         // Jump Input
-        if (keys[' '] && isGrounded) {
+        // Jump Input
+        if (input.space && isGrounded) {
             myPlayerMesh.userData.velocityY = 0.22; // Initial Jump Velocity (per 16ms unit)
             isGrounded = false;
         }
@@ -2030,7 +1148,8 @@ function animate() {
 
             }
             // updateCharacterAnimation call moved to after mixer.update
-            const isMovingInput = keys['w'] || keys['s'] || keys['a'] || keys['d'];
+            // updateCharacterAnimation call moved to after mixer.update
+            const isMovingInput = input.w || input.s || input.a || input.d;
 
             // ... (rest of input logic) ...
         }
@@ -2184,7 +1303,7 @@ function animate() {
                 // 3. Network Update
                 // Send updates more frequently or if rotation changed significantly? 
                 // For MVP, just send.
-                socket.emit('playerMovement', {
+                Network.sendMovement({
                     x: myPlayerMesh.position.x,
                     y: myPlayerMesh.position.y,
                     z: myPlayerMesh.position.z,

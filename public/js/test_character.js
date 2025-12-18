@@ -368,11 +368,47 @@ function loadGun() {
         currentGunMesh = gltf.scene;
         // Fix Gimbal Lock issues by changing order
         currentGunMesh.rotation.order = 'YXZ';
-        updateGunParent();
+
+        // Initial Context from current Parent selection
+        const context = (guiParams.parent === 'Spine') ? 'back' : 'hand';
+        loadWrapper(guiParams.gunType, context);
     });
 }
 
-function updateGunParent() {
+// Helper to load and update
+function loadWrapper(gunType, context) {
+    // 1. Try DB
+    loadCalibrationData(gunType, context).then(loaded => {
+        if (!loaded) {
+            // 2. Try Code Presets
+            if (window.WEAPON_SPECS && window.WEAPON_SPECS[gunType]) {
+                const spec = window.WEAPON_SPECS[gunType];
+                const cfg = spec[context]; // 'hand' or 'back'
+
+                if (cfg) {
+                    console.log(`Loading Code Preset for ${gunType} (${context})`);
+                    guiParams.gx = cfg.pos.x;
+                    guiParams.gy = cfg.pos.y;
+                    guiParams.gz = cfg.pos.z;
+                    guiParams.grx = THREE.MathUtils.radToDeg(cfg.rot.x);
+                    guiParams.gry = THREE.MathUtils.radToDeg(cfg.rot.y);
+                    guiParams.grz = THREE.MathUtils.radToDeg(cfg.rot.z);
+                    guiParams.scale = cfg.scale;
+                }
+            }
+        }
+        updateGunParent(false); // Update parent but don't re-trigger load
+    });
+}
+
+function updateGunParent(shouldLoad = true) {
+    if (shouldLoad) {
+        // If user changed parent in dropdown, we should load that context's data
+        const context = (guiParams.parent === 'Spine') ? 'back' : 'hand';
+        loadWrapper(guiParams.gunType, context);
+        return; // loadWrapper will call updateGunParent(false)
+    }
+
     if (!currentGunMesh) return;
 
     let parent = scene;
@@ -529,19 +565,25 @@ animate();
 // --- PERSISTENCE ---
 async function saveCalibrationData() {
     const data = { ...guiParams };
-    // Remove functions
     delete data.logValues;
     delete data.save;
+
+    // Determine Context: Hand or Back?
+    const context = (guiParams.parent === 'Spine') ? 'back' : 'hand';
+
+    // KEY: sandbox_GunName_Context (e.g., sandbox_Sniper_hand)
+    // We save this SPECIFIC STATE.
+    const typeKey = `sandbox_${guiParams.gunType}_${context}`;
 
     try {
         const res = await fetch('/api/calibration', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'sandbox', data: data })
+            body: JSON.stringify({ type: typeKey, data: data })
         });
         const json = await res.json();
         if (json.success) {
-            alert("Saved to Database!");
+            alert(`Saved to ${typeKey}!`);
         } else {
             alert("Save Failed: " + json.error);
         }
@@ -551,25 +593,50 @@ async function saveCalibrationData() {
     }
 }
 
-async function loadCalibrationData() {
-    try {
-        const res = await fetch('/api/calibration/sandbox');
-        const data = await res.json();
-        if (data && Object.keys(data).length > 0) {
-            console.log("Loaded Calibration Data:", data);
-            // Merge into guiParams
-            Object.assign(guiParams, data);
+async function loadCalibrationData(gunType, context) {
+    // If context not provided, guess? No, we demand context.
+    // context: 'hand' or 'back'
+    if (!context) context = 'hand';
 
-            // Restore methods if overwritten (Object.assign overwrites everything)
-            // But we deleted them before saving, so they are missing in 'data'.
-            // guiParams methods are defined in original object.
-            // Wait, Object.assign(target, source).
-            // guiParams now has values. Methods are preserved in original guiParams referenced?
-            // No, guiParams IS the target.
-            // If data doesn't have 'logValues', it won't overwrite existing 'logValues'.
-            // Correct.
+    // Try specific key first: sandbox_Sniper_hand
+    const typeKey = `sandbox_${gunType}_${context}`;
+
+    try {
+        let res = await fetch(`/api/calibration/${typeKey}`);
+        let data = await res.json();
+
+        // Fallback to legacy 'sandbox_Sniper' if new key not found?
+        // Maybe. But for now let's stick to the new strict scheme.
+
+        if (data && Object.keys(data).length > 0) {
+            console.log(`Loaded Calibration for ${typeKey}:`, data);
+
+            // We ONLY want to overwrite the Transform variables (gx, gy, gz, grx, gry, grz, scale)
+            // We do NOT want to overwrite 'parent' or 'gunType', or we get loops.
+
+            guiParams.gx = data.gx !== undefined ? data.gx : guiParams.gx;
+            guiParams.gy = data.gy !== undefined ? data.gy : guiParams.gy;
+            guiParams.gz = data.gz !== undefined ? data.gz : guiParams.gz;
+
+            guiParams.grx = data.grx !== undefined ? data.grx : guiParams.grx;
+            guiParams.gry = data.gry !== undefined ? data.gry : guiParams.gry;
+            guiParams.grz = data.grz !== undefined ? data.grz : guiParams.grz;
+
+            guiParams.scale = data.scale !== undefined ? data.scale : guiParams.scale;
+
+            // Also bone rotations might be saved in data, restore them if present
+            // (The user might have tweaked arm pos for the gun)
+            Object.keys(data).forEach(k => {
+                if (k.startsWith('rArm') || k.startsWith('lArm') || k.startsWith('spine') || k.endsWith('Curl')) {
+                    guiParams[k] = data[k];
+                }
+            });
+
+            return true;
         }
+        return false;
     } catch (e) {
-        console.warn("Could not load calibration data (server might be offline or empty db)", e);
+        console.warn("Could not load calibration data", e);
+        return false;
     }
 }
