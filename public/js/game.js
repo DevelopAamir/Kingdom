@@ -40,7 +40,7 @@ window.worldItems = []; // Array of { mesh, type, collider }
 // Variables for Controls
 let pitchObject, yawObject;
 let isLocked = false;
-let isFirstPerson = false;
+let isFirstPerson = true;
 
 function toggleCamera() {
     isFirstPerson = !isFirstPerson;
