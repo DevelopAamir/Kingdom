@@ -7,6 +7,7 @@
 window.FiringSystem = {
     bullets: [], // Array of active visual bullets/tracers
     lastFireTime: 0,
+    hasFiredThisTrigger: false, // For single-shot weapons like Sniper
 
     // Config
     DEFAULT_FIRE_RATE: 0.15, // Seconds
@@ -75,27 +76,58 @@ window.FiringSystem = {
         if (!window.myPlayerMesh || window.myPlayerMesh.userData.isDead) return;
         if (!window.Controls) return;
 
-        // 1. Check Input
+        // Check Input
         if (window.Controls.isFiring) {
             this.attemptShoot();
+        } else {
+            // Reset single-shot flag when trigger is released
+            this.hasFiredThisTrigger = false;
         }
     },
 
     attemptShoot: function () {
         const now = Date.now() / 1000;
 
-        // 1. Fire Rate Check
-        // Future: Check current weapon spec for fire rate
-        const fireRate = this.DEFAULT_FIRE_RATE;
+        // Get current weapon spec
+        let fireRate = this.DEFAULT_FIRE_RATE;
+        let isAutomatic = true;
+
+        if (window.myPlayerMesh && window.myPlayerMesh.userData) {
+            const ud = window.myPlayerMesh.userData;
+            if (ud.equippedSlot !== null && ud.backGuns && ud.backGuns[ud.equippedSlot]) {
+                const gun = ud.backGuns[ud.equippedSlot];
+                const type = gun.userData.pickupType || 'MPSD';
+                const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+
+                if (spec) {
+                    if (spec.fireRate !== undefined) fireRate = spec.fireRate;
+                    if (spec.isAutomatic !== undefined) isAutomatic = spec.isAutomatic;
+                }
+            }
+        }
+
+        // For non-automatic weapons (like Sniper), require trigger release between shots
+        if (!isAutomatic) {
+            if (this.hasFiredThisTrigger) return; // Already fired this trigger press
+            // Don't set flag yet - wait until after shot fires
+        }
+
+        // Fire Rate Check
         if (now - this.lastFireTime < fireRate) return;
 
         this.lastFireTime = now;
 
-        // 2. Ammo Check (Future)
-        // if (ammo <= 0) return;
-
-        // 3. EXECUTE SHOT
+        // EXECUTE SHOT
         this.executeShot(true); // isLocal = true
+
+        // Mark single-shot weapons as fired AFTER shot executes
+        // This allows firing pose to show briefly before switching back
+        if (!isAutomatic) {
+            // Use a small delay so the firing pose shows momentarily
+            setTimeout(() => {
+                this.hasFiredThisTrigger = true;
+            }, 100); // 100ms delay to show firing pose
+        }
     },
 
     // Main Shot Logic (Called by local input OR network event)
@@ -157,8 +189,23 @@ window.FiringSystem = {
 
             // Recoil
             if (window.myPlayerMesh.userData) {
-                window.myPlayerMesh.userData.currentRecoil = (window.myPlayerMesh.userData.currentRecoil || 0) + 0.2;
-                window.myPlayerMesh.userData.shootTimer = 0.3; // Match remote timer for pose stability
+                const ud = window.myPlayerMesh.userData;
+                ud.currentRecoil = (ud.currentRecoil || 0) + 0.2;
+
+                // Get weapon type for shoot timer duration
+                let shootTimerDuration = 0.3; // Default for rapid fire weapons
+                if (ud.equippedSlot !== null && ud.backGuns && ud.backGuns[ud.equippedSlot]) {
+                    const gun = ud.backGuns[ud.equippedSlot];
+                    const type = gun.userData.pickupType || 'MPSD';
+                    const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+
+                    // For non-automatic weapons (sniper), use longer timer to show full recoil then reset
+                    if (spec && !spec.isAutomatic) {
+                        shootTimerDuration = 0.5; // Longer recoil animation for sniper
+                    }
+                }
+
+                ud.shootTimer = shootTimerDuration;
                 this.currentRecoil += this.RECOIL_KICK;
             }
 
@@ -220,6 +267,18 @@ window.FiringSystem = {
                 hitPoint = intersects[0].point;
                 let obj = intersects[0].object;
 
+                // Detect Headshot by checking hit object name
+                let isHeadshot = false;
+                let checkBone = obj;
+                while (checkBone) {
+                    const name = checkBone.name ? checkBone.name.toLowerCase() : '';
+                    if (name.includes('head')) {
+                        isHeadshot = true;
+                        break;
+                    }
+                    checkBone = checkBone.parent;
+                }
+
                 // Find Root Player by traversing up and checking against otherPlayers
                 let foundId = null;
                 let checkObj = obj;
@@ -247,11 +306,18 @@ window.FiringSystem = {
                     }
                 }
 
+                // Get current weapon type
+                let weaponType = 'MPSD';
+                const ud = window.myPlayerMesh.userData;
+                if (ud.equippedSlot !== null && ud.backGuns && ud.backGuns[ud.equippedSlot]) {
+                    weaponType = ud.backGuns[ud.equippedSlot].userData.pickupType || 'MPSD';
+                }
+
                 if (foundId) {
                     hitTarget = foundId;
                     // HIT!
-                    console.log("HIT DETECTED:", foundId, "at", intersects[0].point);
-                    this.onHit(foundId, intersects[0].point);
+                    console.log("HIT DETECTED:", foundId, "at", intersects[0].point, isHeadshot ? "(HEADSHOT!)" : "(body)");
+                    this.onHit(foundId, intersects[0].point, weaponType, isHeadshot);
                 }
             }
         }
@@ -275,15 +341,23 @@ window.FiringSystem = {
         this.spawnTracer(startPos, endPos);
     },
 
-    onHit: function (targetId, point) {
-        console.log("HIT PLAYER:", targetId);
+    onHit: function (targetId, point, weaponType = 'MPSD', isHeadshot = false) {
+        // Get damage from weapon specs
+        const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[weaponType] : null;
+        let damage = 10; // Default fallback
+
+        if (spec && spec.damage) {
+            damage = isHeadshot ? spec.damage.head : spec.damage.body;
+        }
+
+        console.log("HIT PLAYER:", targetId, "Weapon:", weaponType, "Headshot:", isHeadshot, "Damage:", damage);
 
         // 1. Network Send
-        if (window.Network) Network.sendHit(targetId, 10);
+        if (window.Network) Network.sendHit(targetId, damage);
 
-        // 2. Visual Number
+        // 2. Visual Number (Pass isHeadshot for red color)
         if (window.spawnDamagePopup) {
-            window.spawnDamagePopup(point, 10);
+            window.spawnDamagePopup(point, damage, isHeadshot);
         }
     },
 

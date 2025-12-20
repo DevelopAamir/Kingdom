@@ -37,7 +37,7 @@ io.on('connection', (socket) => {
                     y: user.y || 1,
                     z: user.z || 0,
                     rotation: 0,
-                    health: user.health > 0 ? user.health : 100, // Respawn if dead stored
+                    health: user.health > 0 ? user.health : 200, // Respawn if dead stored (200 HP max)
                     inventory: user.inventory || []
                 };
 
@@ -88,15 +88,16 @@ io.on('connection', (socket) => {
         // data = { targetId: string, damage: number }
         // Trust Client for MVP Hit Detection
         const targetId = data.targetId;
+        const damage = data.damage || 10; // Use client damage, fallback to 10
         const target = players[targetId];
 
         if (target && target.health > 0) {
-            target.health -= 10;
+            target.health -= damage;
 
             // Notify Hit
             io.to(targetId).emit('updateHealth', target.health);
             // Include damage amount for visual feedback
-            io.emit('playerDamaged', { id: targetId, health: target.health, damage: 10 });
+            io.emit('playerDamaged', { id: targetId, health: target.health, damage: damage });
             if (target.health <= 0) {
                 // PLAYER DIED
                 io.emit('playerDied', { id: targetId, killerId: socket.id });
@@ -116,7 +117,7 @@ io.on('connection', (socket) => {
                 setTimeout(() => {
                     if (players[targetId]) {
                         const t = players[targetId];
-                        t.health = 100;
+                        t.health = 200;
                         t.x = (Math.random() - 0.5) * 50;
                         t.y = 0; // Fix: Spawn on ground, not in air
                         t.z = (Math.random() - 0.5) * 50;
@@ -125,7 +126,7 @@ io.on('connection', (socket) => {
                         // Broadcast Respawn to ALL (Reset Animations + Position)
                         io.emit('playerRespawn', { id: targetId, x: t.x, y: t.y, z: t.z });
 
-                        io.to(targetId).emit('updateHealth', 100); // Inform client they are alive
+                        io.to(targetId).emit('updateHealth', 200); // Inform client they are alive
                     }
                 }, 3000); // 3 Seconds Delay
             }

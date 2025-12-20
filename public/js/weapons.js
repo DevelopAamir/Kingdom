@@ -71,7 +71,11 @@ window.WEAPON_SPECS = {
             // This gets transformed to world space when shooting
             // Negative Z because gun is rotated 180° on Y axis
             muzzlePos: new THREE.Vector3(0, 0.02, 0)
-        }
+        },
+        // Weapon Stats
+        damage: { body: 10, head: 50 },
+        fireRate: 0.15,
+        isAutomatic: true
     },
     'Sniper': {
         back: {
@@ -99,7 +103,11 @@ window.WEAPON_SPECS = {
             },
             // Muzzle position for sniper rifle (longer barrel)
             muzzlePos: new THREE.Vector3(0, 0, 0)
-        }
+        },
+        // Weapon Stats
+        damage: { body: 150, head: 800 },
+        fireRate: 1.0,
+        isAutomatic: false  // Single-shot only
     }
 };
 

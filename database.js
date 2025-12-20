@@ -10,7 +10,7 @@ db.serialize(() => {
         username TEXT UNIQUE,
         password TEXT,
         inventory TEXT DEFAULT '[]',
-        health INTEGER DEFAULT 100,
+        health INTEGER DEFAULT 200,
         x REAL DEFAULT 0,
         y REAL DEFAULT 1,
         z REAL DEFAULT 0
@@ -29,7 +29,7 @@ const Database = {
                 const hash = await bcrypt.hash(password, 10);
                 db.run(`INSERT INTO users (username, password) VALUES (?, ?)`, [username, hash], function (err) {
                     if (err) return reject(err);
-                    resolve({ id: this.lastID, username, health: 100, inventory: [] });
+                    resolve({ id: this.lastID, username, health: 200, inventory: [] });
                 });
             } catch (e) {
                 reject(e);

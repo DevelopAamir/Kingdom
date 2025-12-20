@@ -310,17 +310,18 @@ const BONE_MAPPINGS = {
 
 
 // --- DAMAGE NUMBER LOGIC ---
-function spawnDamagePopup(position, damage) {
+function spawnDamagePopup(position, damage, isHeadshot = false) {
     const container = document.getElementById('damage-container');
     if (!container) return;
 
     const el = document.createElement('div');
     el.innerText = damage;
     el.style.position = 'absolute';
-    el.style.color = '#ff0000'; // RED
+    // RED for headshots, WHITE for body shots
+    el.style.color = isHeadshot ? '#ff0000' : '#ffffff';
     el.style.fontWeight = 'bold';
-    el.style.fontSize = '24px';
-    el.style.textShadow = '1px 1px 2px black';
+    el.style.fontSize = isHeadshot ? '32px' : '24px'; // Larger for headshots
+    el.style.textShadow = '2px 2px 4px black';
     el.style.pointerEvents = 'none';
     el.style.userSelect = 'none';
 
@@ -649,7 +650,7 @@ function onMouseClick() {
 }
 
 function updateHealthUI(hp) {
-    document.getElementById('health-display').innerText = hp + "%";
+    document.getElementById('health-display').innerText = hp + " HP";
     if (hp <= 0) {
         // Do not show death screen immediately, wait for animation
         // document.getElementById('death-screen').style.display = 'block';
@@ -808,9 +809,17 @@ function updateCharacterAnimation(mesh, dt, time) {
 
                 // Determine Shooting State
                 // Local player uses Controls; Remote players use shootTimer
-                const isFiring = (mesh === window.myPlayerMesh)
+                let isFiring = (mesh === window.myPlayerMesh)
                     ? (window.Controls && window.Controls.isFiring)
                     : (ud.shootTimer > 0);
+
+                // For local player with non-automatic weapons (like Sniper):
+                // If already fired this trigger press, return to holding pose
+                if (mesh === window.myPlayerMesh && isFiring && spec.isAutomatic === false) {
+                    if (window.FiringSystem && window.FiringSystem.hasFiredThisTrigger) {
+                        isFiring = false;
+                    }
+                }
 
                 // Select Configuration (Shoot vs Hand)
                 // Use shoot config if firing and available, otherwise default to hand
