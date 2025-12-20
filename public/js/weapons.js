@@ -260,6 +260,13 @@ window.toggleWeapon = function (slot) {
     if (!myPlayerMesh || myPlayerMesh.userData.isDead) return;
 
     const ud = myPlayerMesh.userData;
+
+    // Prevent switching during animation
+    if (ud.isSwitchingWeapon) {
+        console.log("Weapon switch in progress, please wait...");
+        return;
+    }
+
     // Check if we have a weapon in that slot
     if (!ud.backGuns || !ud.backGuns[slot]) return;
 
@@ -332,16 +339,60 @@ window.unequipWeapon = function (targetPlayer = myPlayerMesh) {
 };
 
 window.equipWeapon = function (slot, targetPlayer = myPlayerMesh) {
-    unequipWeapon(targetPlayer); // Ensure nothing else is held
-
     if (!targetPlayer) return;
     const ud = targetPlayer.userData;
+
+    // Prevent switching during animation
+    if (ud.isSwitchingWeapon) {
+        console.log("Already switching weapon, please wait...");
+        return;
+    }
+
+    // If already equipped, do nothing
+    if (ud.equippedSlot === slot) return;
 
     if (!ud.backGuns) return; // Should not happen
 
     const gunMesh = ud.backGuns[slot];
+    if (!gunMesh || !ud.spine) return;
 
-    if (gunMesh && ud.spine) {
+    // Check if we need to unequip current weapon first
+    const needsUnequip = (ud.equippedSlot !== null && ud.equippedSlot !== undefined);
+
+    if (needsUnequip) {
+        // Sequential switching: unequip first, then equip after delay
+        ud.isSwitchingWeapon = true;
+
+        // Step 1: Unequip current weapon
+        unequipWeapon(targetPlayer);
+
+        // Step 2: Wait 300ms, then equip new weapon
+        setTimeout(() => {
+            // KEEP ATTACHED TO SPINE (As requested)
+            if (gunMesh.parent !== ud.spine) {
+                scene.remove(gunMesh);
+                ud.spine.add(gunMesh);
+            }
+
+            // Apply Hand Transform
+            const type = gunMesh.userData.pickupType || 'Default';
+            const spec = window.WEAPON_SPECS[type] || window.DEFAULT_WEAPON_SPEC;
+            let cfg = spec.hand;
+
+            gunMesh.position.copy(cfg.pos);
+            gunMesh.rotation.setFromVector3(cfg.rot);
+            gunMesh.scale.setScalar(cfg.scale);
+
+            // Fix Gimbal Lock
+            gunMesh.rotation.order = 'YXZ';
+
+            ud.equippedSlot = slot;
+            ud.isSwitchingWeapon = false; // Animation complete
+
+            if (targetPlayer === myPlayerMesh) console.log(`Equipped Weapon ${slot + 1}`);
+        }, 300); // 300ms delay for animation
+    } else {
+        // No weapon currently equipped, equip immediately
         // KEEP ATTACHED TO SPINE (As requested)
         if (gunMesh.parent !== ud.spine) {
             scene.remove(gunMesh);
@@ -351,11 +402,7 @@ window.equipWeapon = function (slot, targetPlayer = myPlayerMesh) {
         // Apply Hand Transform
         const type = gunMesh.userData.pickupType || 'Default';
         const spec = window.WEAPON_SPECS[type] || window.DEFAULT_WEAPON_SPEC;
-
         let cfg = spec.hand;
-
-        // Note: CALIBRATION.HAND_TRANSFORM is still used for basic bone rotation offsets
-        // but for the gun MESH itself, we use the spec.
 
         gunMesh.position.copy(cfg.pos);
         gunMesh.rotation.setFromVector3(cfg.rot);

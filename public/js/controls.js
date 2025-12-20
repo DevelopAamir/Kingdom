@@ -15,6 +15,7 @@ window.Controls = {
     // Joystick State
     joystickVector: { x: 0, y: 0 },
     isSprintToggled: false, // Mobile toggle
+    isJoystickActive: false, // Track if joystick is currently being used
 
     // Init Listeners
     init: function (camera, yawObject, pitchObject) {
@@ -56,6 +57,10 @@ window.Controls = {
     // --- KEYBOARD HANDLERS ---
     onKeyDown: function (e) {
         const key = e.key.toLowerCase();
+
+        // Check if player is dead - disable all actions
+        const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+        if (isDead) return; // Ignore all input when dead
 
         // Toggle Camera
         if (key === 'c' && window.toggleCamera) window.toggleCamera();
@@ -99,6 +104,10 @@ window.Controls = {
     },
 
     onMouseDown: function (e) {
+        // Check if player is dead - disable firing
+        const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+        if (isDead) return;
+
         if (this.isLocked) {
             this.isFiring = true;
         } else {
@@ -127,6 +136,13 @@ window.Controls = {
         });
 
         manager.on('move', (evt, data) => {
+            // Check if player is dead - disable joystick
+            const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+            if (isDead) return;
+
+            // Mark joystick as active
+            this.isJoystickActive = true;
+
             const forward = data.vector.y;
             const turn = data.vector.x;
 
@@ -143,6 +159,8 @@ window.Controls = {
         manager.on('end', () => {
             this.keys.w = false; this.keys.s = false;
             this.keys.a = false; this.keys.d = false;
+            // Mark joystick as inactive
+            this.isJoystickActive = false;
         });
 
         manager.on('start', () => {
@@ -156,13 +174,21 @@ window.Controls = {
         // Buttons
         const fireBtn = document.getElementById('mobile-fire-btn');
         if (fireBtn) {
-            fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.isFiring = true; });
+            fireBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+                if (!isDead) this.isFiring = true;
+            });
             fireBtn.addEventListener('touchend', (e) => { e.preventDefault(); this.isFiring = false; });
         }
 
         const jumpBtn = document.getElementById('jump-btn');
         if (jumpBtn) {
-            jumpBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.keys[' '] = true; });
+            jumpBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+                if (!isDead) this.keys[' '] = true;
+            });
             jumpBtn.addEventListener('touchend', (e) => { e.preventDefault(); this.keys[' '] = false; });
         }
 
@@ -170,6 +196,12 @@ window.Controls = {
         if (runBtn) {
             runBtn.addEventListener('touchstart', (e) => {
                 e.preventDefault();
+                const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+                if (isDead) return;
+
+                // Ignore run button if joystick is active (joystick has priority)
+                if (this.isJoystickActive) return;
+
                 this.isSprintToggled = !this.isSprintToggled;
                 this.keys.Shift = this.isSprintToggled;
                 this.syncRunButton();
@@ -178,14 +210,26 @@ window.Controls = {
 
         // Weapon Selection
         const w1 = document.getElementById('mobile-weapon-1');
-        if (w1) w1.addEventListener('touchstart', (e) => { e.preventDefault(); if (window.toggleWeapon) window.toggleWeapon(0); });
+        if (w1) w1.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+            if (!isDead && window.toggleWeapon) window.toggleWeapon(0);
+        });
 
         const w2 = document.getElementById('mobile-weapon-2');
-        if (w2) w2.addEventListener('touchstart', (e) => { e.preventDefault(); if (window.toggleWeapon) window.toggleWeapon(1); });
+        if (w2) w2.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+            if (!isDead && window.toggleWeapon) window.toggleWeapon(1);
+        });
 
         // Cam
         const cam = document.getElementById('mobile-cam-btn');
-        if (cam) cam.addEventListener('touchstart', (e) => { e.preventDefault(); if (window.toggleCamera) window.toggleCamera(); });
+        if (cam) cam.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+            if (!isDead && window.toggleCamera) window.toggleCamera();
+        });
 
         // Show UI
         const mc = document.getElementById('mobile-controls');

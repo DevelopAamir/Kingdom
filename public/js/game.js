@@ -978,17 +978,22 @@ function animate() {
         // 2. Movement Inputs (From Controls)
         const input = Controls.getMovementDirection(); // returns {w,a,s,d,space,shift}
 
+        // FIX: Disable ALL movement if dead
         let moveForward = input.w;
+        let moveBackward = input.s;
+        let moveLeft = input.a;
+        let moveRight = input.d;
+        let isSprint = input.shift;
+        let jumpInput = input.space;
 
-        // FIX: Disable movement if dead
         if (myPlayerMesh.userData.isDead) {
             moveForward = false;
+            moveBackward = false;
+            moveLeft = false;
+            moveRight = false;
+            isSprint = false;
+            jumpInput = false;
         }
-
-        const moveBackward = input.s;
-        const moveLeft = input.a;
-        const moveRight = input.d;
-        const isSprint = input.shift;
 
         // Wait, input.shift includes toggle logic from Controls? Yes we updated it.
         // Actually Controls.getMovementDirection().shift is based on Key Shift OR Toggle.
@@ -1012,10 +1017,12 @@ function animate() {
             else if (moveRight) angleOffset = -Math.PI / 4; // 45 deg Right
         } else if (moveBackward) {
             hasInput = true;
-            angleOffset = Math.PI;
-            if (moveLeft) angleOffset = Math.PI - Math.PI / 4;
-            else if (moveRight) angleOffset = -Math.PI + Math.PI / 4;
-            else angleOffset = Math.PI; // 180 deg Back
+            // Keep facing forward but move backward (opposite direction)
+            // The backward animation will handle the visual appearance
+            angleOffset = Math.PI; // Move backward (180 degrees from facing direction)
+            if (moveLeft) angleOffset = Math.PI - Math.PI / 4; // Backward-left
+            else if (moveRight) angleOffset = -Math.PI + Math.PI / 4; // Backward-right
+            else angleOffset = Math.PI; // Move straight back
         } else if (moveLeft) {
             hasInput = true;
             angleOffset = Math.PI / 2; // 90 deg Left
@@ -1043,9 +1050,14 @@ function animate() {
                 // Target Rotation = Camera Yaw + Offset + 180 (Math.PI) to face away
                 let targetRotation = cameraYaw + angleOffset + Math.PI;
 
+                // FIX: If moving backward, keep facing forward (don't turn around)
+                // The backward animation will play while character faces forward
+                if (moveBackward) {
+                    targetRotation = cameraYaw + Math.PI; // Face forward, not backward
+                }
                 // FIX: If strafing, ignore angleOffset for rotation so we face forward
                 // The character will move sideways but look forward (Run_Left / Run_Right animation handles visuals)
-                if (isStrafing) {
+                else if (isStrafing) {
                     targetRotation = cameraYaw + Math.PI;
                 }
 
@@ -1165,7 +1177,7 @@ function animate() {
 
         // Jump Input
         // Jump Input
-        if (input.space && isGrounded) {
+        if (jumpInput && isGrounded) {
             myPlayerMesh.userData.velocityY = 0.22; // Initial Jump Velocity (per 16ms unit)
             isGrounded = false;
         }
