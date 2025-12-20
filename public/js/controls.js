@@ -175,6 +175,21 @@ window.Controls = {
                 this.syncRunButton();
             });
         }
+
+        // Weapon Selection
+        const w1 = document.getElementById('mobile-weapon-1');
+        if (w1) w1.addEventListener('touchstart', (e) => { e.preventDefault(); if (window.toggleWeapon) window.toggleWeapon(0); });
+
+        const w2 = document.getElementById('mobile-weapon-2');
+        if (w2) w2.addEventListener('touchstart', (e) => { e.preventDefault(); if (window.toggleWeapon) window.toggleWeapon(1); });
+
+        // Cam
+        const cam = document.getElementById('mobile-cam-btn');
+        if (cam) cam.addEventListener('touchstart', (e) => { e.preventDefault(); if (window.toggleCamera) window.toggleCamera(); });
+
+        // Show UI
+        const mc = document.getElementById('mobile-controls');
+        if (mc) mc.style.display = 'block';
     },
 
     initTouchLook: function () {

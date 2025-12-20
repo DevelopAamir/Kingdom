@@ -42,6 +42,13 @@ window.Network = {
             // Start in "Paused" state so user clicks to capture mouse (PC only)
             if (!isMobile) {
                 document.getElementById('pause-screen').style.display = 'flex';
+            } else {
+                // Auto-fullscreen on mobile
+                if (document.documentElement.requestFullscreen) {
+                    document.documentElement.requestFullscreen().catch(err => {
+                        console.log('Fullscreen request failed:', err);
+                    });
+                }
             }
 
             initGame(data.player);
