@@ -53,6 +53,24 @@ window.WEAPON_SPECS = {
             pos: new THREE.Vector3(0.0008, -0.0026, 0.002),
             rot: new THREE.Vector3(THREE.MathUtils.degToRad(323), THREE.MathUtils.degToRad(-91), THREE.MathUtils.degToRad(-4)),
             scale: 0.034
+        },
+        shoot: {
+            // Copied from Sniper shoot, but scale from MPSD (0.034)
+            pos: new THREE.Vector3(-0.0012, 0.0011, 0.0032),
+            rot: new THREE.Vector3(THREE.MathUtils.degToRad(0), THREE.MathUtils.degToRad(180), THREE.MathUtils.degToRad(5.5)),
+            scale: 0.034,
+            pose: {
+                rightArm: { x: -0.164, y: 0.179, z: -0.555 },
+                rightForeArm: { x: -1.486, y: -1.339, z: 0.778 },
+                rightHand: { x: 0.23, y: 1.077, z: -0.066 },
+                leftArm: { x: -2.106, y: -0.365, z: -0.714 },
+                leftForeArm: { x: -0.465, y: 1.164, z: 0.032 },
+                leftHand: { x: -0.166, y: -0.21, z: 0.13 }
+            },
+            // Muzzle position offset in local gun space
+            // This gets transformed to world space when shooting
+            // Negative Z because gun is rotated 180° on Y axis
+            muzzlePos: new THREE.Vector3(0, 0.02, 0)
         }
     },
     'Sniper': {
@@ -66,6 +84,21 @@ window.WEAPON_SPECS = {
             pos: new THREE.Vector3(-0.0006, -0.0024, 0.0021),
             rot: new THREE.Vector3(THREE.MathUtils.degToRad(360), THREE.MathUtils.degToRad(-9.4), THREE.MathUtils.degToRad(-25.7)),
             scale: 0.0016
+        },
+        shoot: {
+            pos: new THREE.Vector3(-0.0012, 0.0011, 0.0032),
+            rot: new THREE.Vector3(THREE.MathUtils.degToRad(0), THREE.MathUtils.degToRad(-87), THREE.MathUtils.degToRad(5.5)),
+            scale: 0.0016,
+            pose: {
+                rightArm: { x: -0.164, y: 0.179, z: -0.555 },
+                rightForeArm: { x: -1.486, y: -1.339, z: 0.778 },
+                rightHand: { x: 0.23, y: 1.077, z: -0.066 },
+                leftArm: { x: -2.106, y: -0.365, z: -0.714 },
+                leftForeArm: { x: -0.465, y: 1.164, z: 0.032 },
+                leftHand: { x: -0.166, y: -0.21, z: 0.13 }
+            },
+            // Muzzle position for sniper rifle (longer barrel)
+            muzzlePos: new THREE.Vector3(0, 0, 0)
         }
     }
 };
@@ -181,6 +214,7 @@ window.createGun = function () {
     flashGeo.rotateX(Math.PI / 2); // Point forward
     const flashMat = new THREE.MeshBasicMaterial({ color: 0xFFFF00, transparent: true, opacity: 0.8 });
     const flash = new THREE.Mesh(flashGeo, flashMat);
+    flash.name = 'MuzzleFlash';
     flash.visible = false;
     muzzle.add(flash);
 
@@ -335,92 +369,7 @@ window.equipWeapon = function (slot, targetPlayer = myPlayerMesh) {
     }
 };
 
-window.createBullet = function (isLocal = false, shooter = null) {
-    const bullet = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 6, 6),
-        new THREE.MeshBasicMaterial({ color: 0xffff00 })
-    );
 
-    let startPos = new THREE.Vector3();
-    let direction = new THREE.Vector3();
-
-    if (isLocal) {
-        // 1. Get Gun Muzzle Position (World)
-        if (myPlayerMesh && myPlayerMesh.userData && myPlayerMesh.userData.muzzle) {
-            // If weapon equipped? 
-            // We need to find the EQUIPPED gun's muzzle.
-            // Access via equippedSlot.
-            const ud = myPlayerMesh.userData;
-            if (ud.equippedSlot !== null && ud.backGuns[ud.equippedSlot]) {
-                const gun = ud.backGuns[ud.equippedSlot];
-                // Check if gun has 'muzzle' child (It should if created via createGun)
-                // But imported GLBs might differ.
-                // Assuming createGun structure for now or using camera as fallback.
-
-                // For now, simpler fallback: Camera
-                camera.getWorldPosition(startPos);
-                camera.getWorldDirection(direction);
-            } else {
-                camera.getWorldPosition(startPos);
-                camera.getWorldDirection(direction);
-            }
-        } else {
-            // Fallback
-            camera.getWorldPosition(startPos);
-            camera.getWorldDirection(direction);
-        }
-
-        // Offset slightly forward
-        startPos.add(direction.clone().multiplyScalar(1.0));
-
-    } else {
-        // Remote Player Setup
-        // Shooter Mesh Position + Forward
-        if (shooter) {
-            // Muzzle?
-            shooter.getWorldPosition(startPos);
-            shooter.getWorldDirection(direction); // Character forward
-            startPos.add(new THREE.Vector3(0, 1.5, 0)); // Approx Height
-            startPos.add(direction.clone().multiplyScalar(1.0));
-        }
-    }
-
-    bullet.position.copy(startPos);
-
-    // Direction logic (from camera or shooter forward)
-    // If local, use camera direction.
-    // If remote, use shooter direction.
-
-    // NOTE: This createBullet function logic in game.js was cut off in view, 
-    // I am reconstructing basic logic.
-    // Ideally I should have viewed the whole function.
-    // Proceeding with basic implementation.
-
-    scene.add(bullet);
-
-    // Bullet Physics
-    const velocity = direction.normalize().multiplyScalar(50); // Speed
-
-    const lifeTime = 2.0;
-    let timer = 0;
-
-    const onUpdate = (dt) => {
-        bullet.position.add(velocity.clone().multiplyScalar(dt));
-        timer += dt;
-        if (timer > lifeTime) {
-            scene.remove(bullet);
-            return false; // Stop updating
-        }
-        return true;
-    };
-
-    // Register to update loop (Not accessible directly from weapons.js?)
-    // We need a global bullet manager or hook into animate.
-    // game.js had bullets array?
-    /* ... existing code ... */
-    if (!window.bullets) window.bullets = [];
-    window.bullets.push({ mesh: bullet, update: onUpdate });
-};
 
 // --- ITEM SPAWNER ---
 window.GUN_ASSETS = {

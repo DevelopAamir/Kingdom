@@ -70,15 +70,29 @@ window.Network = {
                     }
                 }
 
-                op.position.set(data.x, data.y, data.z);
-                op.rotation.y = data.rotation;
+                // NEW: Use target variables for smooth interpolation in game loop
+                if (!op.userData.targetPos) op.userData.targetPos = op.position.clone();
 
-                // Apply Pitch to parts
+                // Snap if too far (e.g. teleport/spawn)
+                if (op.position.distanceTo(new THREE.Vector3(data.x, data.y, data.z)) > 10) {
+                    op.position.set(data.x, data.y, data.z);
+                    op.userData.targetPos.set(data.x, data.y, data.z);
+                } else {
+                    op.userData.targetPos.set(data.x, data.y, data.z);
+                }
+
+                op.userData.targetRot = data.rotation;
+
+                // Apply Pitch to parts (snap ok for now)
                 const ud = op.userData;
                 if (ud && data.pitch !== undefined) {
                     if (ud.head) ud.head.rotation.x = data.pitch;
-                    if (ud.rightArm) ud.rightArm.rotation.x = -Math.PI / 2 + data.pitch;
-                    if (ud.leftArm) ud.leftArm.rotation.x = -Math.PI / 3 + data.pitch;
+
+                    // ONLY apply pitch to arms if holding a weapon
+                    if (ud.equippedSlot !== null && ud.equippedSlot !== undefined) {
+                        if (ud.rightArm) ud.rightArm.rotation.x = -Math.PI / 2 + data.pitch;
+                        if (ud.leftArm) ud.leftArm.rotation.x = -Math.PI / 3 + data.pitch;
+                    }
                 }
             }
         });
@@ -87,11 +101,23 @@ window.Network = {
             if (window.otherPlayers && window.otherPlayers[data.id]) {
                 const p = window.otherPlayers[data.id];
                 if (p.userData) {
-                    p.userData.shootTimer = 0.1;
+                    p.userData.shootTimer = 0.3; // Longer to keep pose steady between bullets
                     if (!p.userData.currentRecoil) p.userData.currentRecoil = 0;
                     p.userData.currentRecoil += 0.2;
                 }
-                createBullet(false, p);
+                // Use FiringSystem for remote player shots
+                if (window.FiringSystem) {
+                    window.FiringSystem.executeShot(false, p);
+                }
+            }
+        });
+
+        this.socket.on('playerInventoryUpdated', (data) => {
+            if (window.otherPlayers && window.otherPlayers[data.id]) {
+                const enemy = window.otherPlayers[data.id];
+                if (window.syncRemoteInventory) {
+                    window.syncRemoteInventory(enemy, data.inventory);
+                }
             }
         });
 
@@ -224,20 +250,23 @@ window.Network = {
 
                 enemy.traverse((child) => {
                     if (child.isMesh && child.material) {
-                        if (!child.userData.orgEmissive) child.userData.orgEmissive = child.material.emissive.getHex();
+                        if (child.userData.orgEmissive === undefined) {
+                            child.userData.orgEmissive = child.material.emissive.getHex();
+                        }
                         child.material.emissive.setHex(0xff0000);
                     }
                 });
 
                 setTimeout(() => {
-                    if (window.otherPlayers[data.id]) {
+                    // Check if mesh still exists
+                    if (enemy && enemy.parent) {
                         enemy.traverse((child) => {
                             if (child.isMesh && child.material) {
                                 child.material.emissive.setHex(child.userData.orgEmissive || 0x000000);
                             }
                         });
                     }
-                }, 100);
+                }, 150); // Snappier 150ms flash
 
                 // Spawn Damage Popup
                 // Using global helper if available, or logic here

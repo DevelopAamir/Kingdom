@@ -1,10 +1,10 @@
 // --- GLOBAL VARIABLES ---
-let camera, scene, renderer;
+window.camera = null; window.scene = null; window.renderer = null;
 
 Network.init(); // Initialize Network
-let myPlayerMesh;
-let otherPlayers = {};
-let bullets = [];
+window.myPlayerMesh = null;
+window.otherPlayers = {};
+window.bullets = [];
 let damagePopups = []; // Floating numbers
 // let keys = ... removed (Controls.js)
 
@@ -144,15 +144,15 @@ function initGame(playerData) {
     updateInventoryUI(playerData.inventory);
 
     // 2. Scene Setup
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x60a0e0); // Softer Blue
-    scene.fog = new THREE.Fog(0x60a0e0, 20, 100);
+    window.scene = new THREE.Scene();
+    window.scene.background = new THREE.Color(0x60a0e0); // Softer Blue
+    window.scene.fog = new THREE.Fog(0x60a0e0, 20, 100);
 
     // 6. Camera Rig (simple yaw/pitch objects)
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    window.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
     pitchObject = new THREE.Object3D();
-    pitchObject.add(camera);
+    pitchObject.add(window.camera);
 
     yawObject = new THREE.Object3D();
     yawObject.position.y = 10; // Start high
@@ -168,12 +168,41 @@ function initGame(playerData) {
 
     // 7. Create Local Player (GLB)
     loadCharacter(playerData.model, 0x0000ff, true, (data) => {
-        myPlayerMesh = data.mesh;
-        myPlayerMesh.userData.isLocal = true;
-        scene.add(myPlayerMesh);
+        window.myPlayerMesh = data.mesh;
+        window.myPlayerMesh.userData.isLocal = true;
+        window.scene.add(window.myPlayerMesh);
 
         // Initial Position Check (waiting for server but set safe default)
         myPlayerMesh.position.set(0, 0, 0);
+
+        // Load saved inventory weapons
+        if (playerData.inventory && playerData.inventory.length > 0) {
+            console.log('[initGame] Loading saved inventory:', playerData.inventory);
+            playerData.inventory.forEach((type) => {
+                const url = window.GUN_ASSETS[type];
+                if (!url) {
+                    console.warn(`[initGame] No asset found for weapon type: ${type}`);
+                    return;
+                }
+
+                const loader = new THREE.GLTFLoader();
+                loader.load(url, (gltf) => {
+                    const gun = gltf.scene;
+                    gun.userData.pickupType = type;
+                    gun.userData.isGun = true;
+
+                    // Clone materials for unique state
+                    gun.traverse(c => {
+                        if (c.isMesh && c.material) c.material = c.material.clone();
+                    });
+
+                    attachGunToBack(myPlayerMesh, gun);
+                    console.log(`[initGame] Loaded weapon: ${type}`);
+                }, undefined, (error) => {
+                    console.error(`[initGame] Failed to load weapon ${type}:`, error);
+                });
+            });
+        }
 
         // Hide Head/Torso if FPS? 
         // We'll rely on toggleCamera logic which checks userData
@@ -181,12 +210,12 @@ function initGame(playerData) {
     });
 
     // 4. Renderer
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.outputEncoding = THREE.sRGBEncoding; // Fix dark textures (Linear -> sRGB)
-    document.body.appendChild(renderer.domElement);
+    window.renderer = new THREE.WebGLRenderer({ antialias: true });
+    window.renderer.setSize(window.innerWidth, window.innerHeight);
+    window.renderer.shadowMap.enabled = true;
+    window.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    window.renderer.outputEncoding = THREE.sRGBEncoding; // Fix dark textures (Linear -> sRGB)
+    document.body.appendChild(window.renderer.domElement);
 
     // 5. Light & Floor
     // Soften Lighting: Use Hemisphere Light + Softer Directional
@@ -238,6 +267,9 @@ function initGame(playerData) {
     // --- CONTROLS INIT ---
     Controls.init(camera, yawObject, pitchObject);
 
+    // --- FIRING SYSTEM INIT ---
+    FiringSystem.init(scene);
+
     // Global Resize Listener (Mobile + PC)
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -248,33 +280,7 @@ function initGame(playerData) {
     animate();
 }
 
-function fireWeaponLogic() {
-    // --- RAYCAST HIT DETECTION ---
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
 
-    let meshes = [];
-    let meshToId = {};
-
-    Object.keys(otherPlayers).forEach(id => {
-        meshes.push(otherPlayers[id]);
-        meshToId[otherPlayers[id].uuid] = id;
-    });
-
-    const intersects = raycaster.intersectObjects(meshes, true);
-
-    if (intersects.length > 0) {
-        let hitObj = intersects[0].object;
-        while (hitObj.parent && hitObj.parent.type !== 'Scene') {
-            hitObj = hitObj.parent;
-        }
-
-        const targetId = meshToId[hitObj.uuid];
-        if (targetId) {
-            Network.sendHit(targetId, 10);
-        }
-    }
-}
 
 const CHARACTER_SCALE = 1.0;
 const loader = new THREE.GLTFLoader();
@@ -339,7 +345,10 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
         model.traverse(function (object) {
             if (object.isMesh) {
                 object.castShadow = true;
-                // Preserve original colors/textures.
+                // Clone material so each player has unique visual state (hit flash, etc)
+                if (object.material) {
+                    object.material = object.material.clone();
+                }
             }
         });
 
@@ -356,6 +365,9 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
 
         const deathClip = findClip('death') || findClip('die') || findClip('falling');
         const hitClip = findClip('hit') || findClip('receive') || findClip('damage') || findClip('react');
+        const runLeftClip = findClip('run_left') || findClip('left');
+        const runRightClip = findClip('run_right') || findClip('right');
+        const runBackClip = findClip('run_back') || findClip('back') || findClip('backward');
 
 
         // Safely create actions
@@ -364,6 +376,9 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
         const walkAction = walkClip ? mixer.clipAction(walkClip) : runAction;
         const deathAction = deathClip ? mixer.clipAction(deathClip) : null;
         const hitAction = hitClip ? mixer.clipAction(hitClip) : null;
+        const runLeftAction = runLeftClip ? mixer.clipAction(runLeftClip) : runAction;
+        const runRightAction = runRightClip ? mixer.clipAction(runRightClip) : runAction;
+        const runBackAction = runBackClip ? mixer.clipAction(runBackClip) : runAction;
 
 
         if (deathAction) {
@@ -379,6 +394,8 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
         }
 
         console.log(`Loaded ${modelType}. Animations:`, animations.map(a => a.name));
+        // DEBUG: Store anim names for verification
+        model.userData.animNames = animations.map(a => a.name);
 
         idleAction.play(); // DEFAULT STATE
         runAction.stop();
@@ -510,7 +527,16 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
         const characterData = {
             mesh: model,
             mixer: mixer,
-            actions: { idle: idleAction, run: runAction, walk: walkAction, death: deathAction, hit: hitAction },
+            actions: {
+                idle: idleAction,
+                run: runAction,
+                walk: walkAction,
+                death: deathAction,
+                hit: hitAction,
+                runLeft: runLeftAction,
+                runRight: runRightAction,
+                runBack: runBackAction
+            },
             userData: {
                 muzzle: muzzle,
                 muzzleFlash: muzzleFlash,
@@ -535,7 +561,16 @@ function loadCharacter(modelType, color, isLocal, onLoad) {
                 },
                 restRotations: restRotations,
                 isDead: false,
-                actions: { idle: idleAction, run: runAction, walk: walkAction, death: deathAction, hit: hitAction },
+                actions: {
+                    idle: idleAction,
+                    run: runAction,
+                    walk: walkAction,
+                    death: deathAction,
+                    hit: hitAction,
+                    runLeft: runLeftAction,
+                    runRight: runRightAction,
+                    runBack: runBackAction
+                },
                 activeAction: idleAction
             }
         };
@@ -564,6 +599,10 @@ function addEnemy(id, data) {
         const enemy = charData.mesh;
         enemy.position.set(data.x, data.y, data.z);
 
+        // Sync Initial State
+        enemy.userData.equippedSlot = data.equippedSlot;
+        if (data.inventory) syncRemoteInventory(enemy, data.inventory);
+
         // --- 3D AUDIO ---
         if (window.audioListener && window.enemyStepBuffer) {
             const sound = new THREE.PositionalAudio(window.audioListener);
@@ -578,26 +617,6 @@ function addEnemy(id, data) {
         // Store mesh in map
         otherPlayers[id] = enemy;
         scene.add(enemy);
-
-        // Load Opponent Guns (From Inventory Data)
-        if (data.inventory && Array.isArray(data.inventory)) {
-            data.inventory.forEach((type) => {
-                // If type is object (from some legacy code), extract type property? 
-                // Assuming string 'MPSD' etc.
-                const url = GUN_ASSETS[type] || GUN_ASSETS['MPSD'];
-
-                const loader = new THREE.GLTFLoader();
-                loader.load(url, (gltf) => {
-                    const gun = gltf.scene;
-                    gun.userData.pickupType = type;
-                    gun.traverse(c => {
-                        if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
-                        c.userData.isGun = true;
-                    });
-                    attachGunToBack(enemy, gun);
-                });
-            });
-        }
     });
 }
 
@@ -623,62 +642,7 @@ function playSound(audioSource, volume) {
 let lastShotTime = 0;
 const FIRE_RATE = 0.15; // Seconds between shots
 
-function attemptShoot() {
-    const now = Date.now() * 0.001;
-    lastFireTime = now;
 
-    if (myPlayerMesh) {
-        // FIX: Prevent shooting if dead
-        if (myPlayerMesh.userData.isDead) return;
-
-        // Recoil Impulse
-        if (!myPlayerMesh.userData.currentRecoil) myPlayerMesh.userData.currentRecoil = 0;
-        myPlayerMesh.userData.currentRecoil += 0.2; // Aim kick up
-
-        // Procedural Animation Trigger (Spine + Flash)
-        myPlayerMesh.userData.shootTimer = 0.1;
-
-        // Shoot locally (Visual)
-        createBullet(true); // Fixed: Pass true for isLocal
-        Network.sendShoot();
-
-        // --- RAYCAST HIT DETECTION ---
-        const raycaster = new THREE.Raycaster();
-
-        // Ray from Camera center
-        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-
-        // Check intersections with other players
-        let meshes = [];
-        let meshToId = {};
-
-        Object.keys(otherPlayers).forEach(id => {
-            meshes.push(otherPlayers[id]);
-            meshToId[otherPlayers[id].uuid] = id;
-        });
-
-        const intersects = raycaster.intersectObjects(meshes, true); // recursive for groups
-
-        if (intersects.length > 0) {
-            // Find the root object
-            let hitObj = intersects[0].object;
-            while (hitObj.parent && hitObj.parent.type !== 'Scene') {
-                hitObj = hitObj.parent;
-            }
-
-            const targetId = meshToId[hitObj.uuid];
-            if (targetId) {
-                console.log("Hit player:", targetId);
-                // Trigger Visuals immediately
-                if (intersects[0].point) {
-                    spawnDamagePopup(intersects[0].point, 10);
-                }
-
-                Network.sendHit(targetId, 10);
-            }
-        }
-    }
-}
 
 function onMouseClick() {
     // Only used for single click if needed, but we use isFiring state now
@@ -697,6 +661,71 @@ function updateHealthUI(hp) {
 function updateInventoryUI(inv) {
     const list = inv.length ? inv.join(", ") : "Empty";
     document.getElementById('inv-display').innerText = list;
+}
+
+/**
+ * Syncs a remote player's 3D weapon meshes with their server inventory array.
+ * @param {THREE.Object3D} enemy The remote player's mesh
+ * @param {Array<string>} inventory Array of weapon type strings (e.g. ['MPSD', 'Sniper'])
+ */
+function syncRemoteInventory(enemy, inventory) {
+    console.log('[syncRemoteInventory] Called with:', { enemy: enemy?.name, inventory });
+
+    if (!enemy || !enemy.userData || !inventory) {
+        console.log('[syncRemoteInventory] Early return - missing params');
+        return;
+    }
+    const ud = enemy.userData;
+    if (!ud.backGuns) ud.backGuns = [];
+
+    // Simple strategy: If count or types differ, reload all
+    // In a more advanced version, we'd only add/remove specific ones
+    const currentTypes = ud.backGuns.map(g => g.userData.pickupType);
+    const arraysMatch = (currentTypes.length === inventory.length) && inventory.every((val, index) => val === currentTypes[index]);
+
+    console.log('[syncRemoteInventory] Current:', currentTypes, 'Target:', inventory, 'Match:', arraysMatch);
+
+    if (!arraysMatch) {
+        console.log(`Syncing Inventory for Remote Player. Inv: ${inventory}`);
+
+        // Remove existing guns from bone/scene
+        ud.backGuns.forEach(g => {
+            if (g.parent) g.parent.remove(g);
+        });
+        ud.backGuns = [];
+
+        // Load new ones
+        inventory.forEach((type, index) => {
+            console.log(`[syncRemoteInventory] Loading weapon ${index}: ${type}`);
+            const url = window.GUN_ASSETS[type];
+            if (!url) {
+                console.warn(`[syncRemoteInventory] No asset found for type: ${type}`);
+                return;
+            }
+
+            const loader = window.loader || new THREE.GLTFLoader();
+            loader.load(url, (gltf) => {
+                console.log(`[syncRemoteInventory] Loaded weapon: ${type}`);
+                const mesh = gltf.scene;
+                mesh.userData.pickupType = type;
+                mesh.userData.isGun = true;
+
+                // Clone material for unique state if needed (e.g. hit flash on gun?)
+                mesh.traverse(c => {
+                    if (c.isMesh && c.material) c.material = c.material.clone();
+                });
+
+                attachGunToBack(enemy, mesh);
+
+                // If this was the equipped slot, ensure it moved to hand or is positioned correctly
+                if (ud.equippedSlot === index) {
+                    equipWeapon(index, enemy);
+                }
+            }, undefined, (error) => {
+                console.error(`[syncRemoteInventory] Failed to load ${type}:`, error);
+            });
+        });
+    }
 }
 
 function showNotification(msg) {
@@ -768,10 +797,40 @@ function updateCharacterAnimation(mesh, dt, time) {
 
     // --- WEAPON POSTURE (Overrides) ---
     if (ud.equippedSlot !== undefined && ud.equippedSlot !== null) {
-        const pose = CALIBRATION.HOLDING_POSE;
+        let pose = CALIBRATION.HOLDING_POSE;
+
+        // Dynamic Weapon Transform & Pose
+        if (ud.backGuns && ud.backGuns[ud.equippedSlot]) {
+            const gun = ud.backGuns[ud.equippedSlot];
+            const type = gun.userData.pickupType;
+            if (window.WEAPON_SPECS && window.WEAPON_SPECS[type]) {
+                const spec = window.WEAPON_SPECS[type];
+
+                // Determine Shooting State
+                // Local player uses Controls; Remote players use shootTimer
+                const isFiring = (mesh === window.myPlayerMesh)
+                    ? (window.Controls && window.Controls.isFiring)
+                    : (ud.shootTimer > 0);
+
+                // Select Configuration (Shoot vs Hand)
+                // Use shoot config if firing and available, otherwise default to hand
+                const config = (isFiring && spec.shoot) ? spec.shoot : spec.hand;
+
+                // Apply Arm Pose (if defined in config)
+                if (config && config.pose) {
+                    pose = config.pose;
+                }
+
+                if (config) {
+                    if (config.pos) gun.position.copy(config.pos);
+                    if (config.rot) gun.rotation.setFromVector3(config.rot);
+                    if (config.scale) gun.scale.setScalar(config.scale);
+                }
+            }
+        }
 
         const applyRot = (boneName, mapKey) => {
-            if (ud[boneName]) {
+            if (ud[boneName] && pose[mapKey]) {
                 const e = pose[mapKey];
                 ud[boneName].rotation.set(e.x, e.y, e.z);
             }
@@ -798,7 +857,8 @@ function updateCharacterAnimation(mesh, dt, time) {
 
         // Muzzle Flash Visibility
         if (ud.muzzleFlash) {
-            ud.muzzleFlash.visible = true;
+            // Only show flash for the beginning of the timer (flicker effect)
+            ud.muzzleFlash.visible = (ud.shootTimer > 0.23);
             // Flicker rotation for variety
             ud.muzzleFlash.rotation.z = Math.random() * Math.PI;
         }
@@ -828,24 +888,7 @@ let lastTime = performance.now();
 function animate() {
     requestAnimationFrame(animate);
 
-    // Auto-Fire Check
-    if (Controls.isFiring) {
-        // Enforce Weapon Equipped
-        if (!myPlayerMesh || myPlayerMesh.userData.equippedSlot === null || myPlayerMesh.userData.isDead) {
-            // Controls.isFiring = false; // Should we force reset? Maybe not.
-        } else {
-            attemptShoot();
-        }
-    }
 
-    // Toggle Weapons
-    // Toggle Weapons handled in Controls onKeyDown for 1/2
-    // But animate loop logic for 'Single Trigger' was checking keys['1']. 
-    // Controls handles the event calls directly. So we can remove this block.
-    // Or if we need single frame trigger, we should trust `toggleWeapon` called from `onKeyDown`.
-    // Validated: onKeyDown calls `toggleWeapon`. This polling block is invalid now.
-
-    window.frames = (window.frames || 0) + 1;
 
     // --- DYNAMIC DELTA TIME ---
     const now = performance.now();
@@ -861,6 +904,9 @@ function animate() {
     // OR we can just use 'dt' effectively if we adjust the constants.
     // Plan: Use 'timeScale' to adjust existing per-frame values.
     const timeScale = dt / 0.016;
+
+    // --- FIRING UPDATE ---
+    FiringSystem.update(dt);
 
     const time = Date.now() * 0.001;
 
@@ -958,6 +1004,7 @@ function animate() {
         // Determine Angle Offset based on Keys
         let angleOffset = 0; // Default W
         let hasInput = false;
+        let isStrafing = false; // Flag to prevent rotation when strafing
 
         if (moveForward) {
             hasInput = true;
@@ -965,15 +1012,18 @@ function animate() {
             else if (moveRight) angleOffset = -Math.PI / 4; // 45 deg Right
         } else if (moveBackward) {
             hasInput = true;
-            if (moveLeft) angleOffset = Math.PI * 0.75; // 135 deg Left
-            else if (moveRight) angleOffset = -Math.PI * 0.75; // 135 deg Right
+            angleOffset = Math.PI;
+            if (moveLeft) angleOffset = Math.PI - Math.PI / 4;
+            else if (moveRight) angleOffset = -Math.PI + Math.PI / 4;
             else angleOffset = Math.PI; // 180 deg Back
         } else if (moveLeft) {
             hasInput = true;
             angleOffset = Math.PI / 2; // 90 deg Left
+            isStrafing = true;
         } else if (moveRight) {
             hasInput = true;
             angleOffset = -Math.PI / 2; // 90 deg Right
+            isStrafing = true;
         }
 
         // Apply Rotation
@@ -991,7 +1041,13 @@ function animate() {
                 // ... normal rotation logic ...
                 // Face Movement Direction
                 // Target Rotation = Camera Yaw + Offset + 180 (Math.PI) to face away
-                const targetRotation = cameraYaw + angleOffset + Math.PI;
+                let targetRotation = cameraYaw + angleOffset + Math.PI;
+
+                // FIX: If strafing, ignore angleOffset for rotation so we face forward
+                // The character will move sideways but look forward (Run_Left / Run_Right animation handles visuals)
+                if (isStrafing) {
+                    targetRotation = cameraYaw + Math.PI;
+                }
 
                 // Smooth Rotation (Lerp)
                 // Fix circular wrapping (PI to -PI)
@@ -1187,15 +1243,33 @@ function animate() {
                         targetAction = actions.run;
                         actions.run.timeScale = 0.5; // Slow
                         actions.run.setLoop(THREE.LoopRepeat);
+
                     } else if (isMoving) {
                         // On Ground: Run
-                        targetAction = actions.run;
-                        if (ud.isSprinting) {
-                            actions.run.timeScale = 1.6; // Sprint Speed (Adjusted for 0.12 movement)
+
+                        // Strafe & Backpedal Logic
+                        if (input.s) {
+                            targetAction = actions.runBack || actions.run;
+                            // Procedural Backwards: Reverse run playback if runBack is just a fallback to run
+                            if (targetAction === actions.run && !actions.runBack) {
+                                targetAction.timeScale = -1.1; // Reverse
+                            } else {
+                                targetAction.timeScale = 1.3;
+                            }
+                        } else if (input.a && !input.w) {
+                            targetAction = actions.runLeft || actions.run;
+                            if (targetAction === actions.run) targetAction.timeScale = 1.3;
+                        } else if (input.d && !input.w) {
+                            targetAction = actions.runRight || actions.run;
+                            if (targetAction === actions.run) targetAction.timeScale = 1.3;
                         } else {
-                            actions.run.timeScale = 1.3; // Normal Run Speed (Slightly slower than before to differentiate)
+                            targetAction = actions.run;
+                            if (targetAction === actions.run) {
+                                targetAction.timeScale = ud.isSprinting ? 1.6 : 1.3;
+                            }
                         }
-                        actions.run.setLoop(THREE.LoopRepeat);
+
+                        targetAction.setLoop(THREE.LoopRepeat);
                     } else {
                         targetAction = actions.idle;
                     }
@@ -1222,21 +1296,41 @@ function animate() {
             Object.values(otherPlayers).forEach(mesh => {
                 const ud = mesh.userData;
 
-                // 1. Calculate Speed & Movement State
+                // 1. Interpolation (LERP) for Smoothness
+                if (ud.targetPos) {
+                    mesh.position.lerp(ud.targetPos, 0.2); // Smoothed position
+                }
+                if (ud.targetRot !== undefined) {
+                    let diff = ud.targetRot - mesh.rotation.y;
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    mesh.rotation.y += diff * 0.2; // Smoothed rotation
+                }
+
                 if (!ud.lastPos) ud.lastPos = mesh.position.clone();
 
-                const dist = mesh.position.distanceTo(ud.lastPos);
+                const moveDelta = mesh.position.clone().sub(ud.lastPos);
+                moveDelta.y = 0; // Ignore vertical movement
+                const dist = moveDelta.length();
                 const speed = dist / dt;
 
-                // Set isMoving flag for Hit Logic
+                // Move Direction Tracker (for strafe anims)
+                if (dist > 0.005) {
+                    // Update running direction, but blend it slightly to avoid jitter
+                    const newDir = moveDelta.clone().normalize();
+                    if (!ud.moveDir) ud.moveDir = newDir;
+                    else ud.moveDir.lerp(newDir, 0.3).normalize();
+                }
+
+                // Set isMoving flag
                 ud.isMoving = dist > 0.001;
 
                 // Update last pos
                 ud.lastPos.copy(mesh.position);
 
                 // Smoothed Movement State (Network Interpolation)
-                if (speed > 0.1) {
-                    ud.moveTimer = 0.2;
+                if (speed > 0.05) {
+                    ud.moveTimer = 0.5; // Increased buffer for network stability
 
                     // --- 3D AUDIO TRIGGER ---
                     if (ud.sound && ud.sound.buffer) { // Check buffer loaded
@@ -1273,21 +1367,63 @@ function animate() {
                         // RUN STATE
                         else if (ud.moveTimer > 0) {
                             targetAction = actions.run;
-                            if (actions.run) {
-                                actions.run.timeScale = 1.5;
-                                actions.run.setLoop(THREE.LoopRepeat);
+
+                            // Strafe & Backpedal Logic for Remote Players
+                            if (ud.moveDir) {
+                                // Face direction of move relative to player rotation
+                                // THREE.JS / GLTF Soldier facing is actually +Z in world space 
+                                const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(mesh.quaternion);
+                                const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(mesh.quaternion);
+
+                                const fDot = ud.moveDir.dot(forward);
+                                const rDot = ud.moveDir.dot(right);
+
+                                // 1. Forward (fDot > 0.4)
+                                if (fDot > 0.4) {
+                                    targetAction = actions.run;
+                                    targetAction.timeScale = 1.5;
+                                }
+                                // 2. Backwards (fDot < -0.4)
+                                else if (fDot < -0.4) {
+                                    targetAction = actions.runBack || actions.run;
+                                    if (targetAction === actions.run && !actions.runBack) {
+                                        targetAction.timeScale = -1.3;
+                                    } else {
+                                        targetAction.timeScale = 1.5;
+                                    }
+                                }
+                                // 3. Sideways priority
+                                else if (Math.abs(rDot) > 0.4) {
+                                    if (rDot > 0) {
+                                        targetAction = actions.runRight || actions.run;
+                                    } else {
+                                        targetAction = actions.runLeft || actions.run;
+                                    }
+                                    if (targetAction === actions.run) targetAction.timeScale = 1.5;
+                                }
+                            }
+
+                            if (targetAction && targetAction !== actions.runBack && targetAction !== actions.runLeft && targetAction !== actions.runRight) {
+                                // Reset timescale if not in a special state
+                                if (targetAction.timeScale < 0 && targetAction !== actions.run) {
+                                    targetAction.timeScale = 1.5;
+                                }
+                            }
+
+                            if (targetAction) {
+                                targetAction.setLoop(THREE.LoopRepeat);
                             }
                         }
 
-                        // 3. Crossfade
+                        // 3. Crossfade (Faster for snappiness)
                         if (ud.activeAction !== targetAction) {
                             if (!ud.activeAction) ud.activeAction = actions.idle;
                             const prev = ud.activeAction;
                             const next = targetAction;
 
                             if (prev && next) {
-                                prev.fadeOut(0.2);
-                                next.reset().fadeIn(0.2).play();
+                                prev.fadeOut(0.1);
+                                next.reset().fadeIn(0.1).play();
                                 ud.activeAction = next;
                             }
                         }
@@ -1314,7 +1450,7 @@ function animate() {
             }
 
             // 4. Update Bullets
-            bullets.forEach(b => b.position.add(b.userData.velocity));
+
 
             renderer.render(scene, camera);
         }

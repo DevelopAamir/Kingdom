@@ -1,4 +1,25 @@
 // Basic Setup
+const logStyles = "position:absolute;bottom:0;left:0;width:100%;max-height:150px;background:rgba(0,0,0,0.8);color:lime;font-family:monospace;overflow-y:auto;pointer-events:none;z-index:999;padding:5px;";
+const logContainer = document.createElement('div');
+logContainer.style.cssText = logStyles;
+document.body.appendChild(logContainer);
+
+const originalLog = console.log;
+const originalWarn = console.warn;
+const originalError = console.error;
+
+function logToScreen(msg, color = 'lime') {
+    const el = document.createElement('div');
+    el.innerText = `> ${msg}`;
+    el.style.color = color;
+    logContainer.prepend(el);
+    if (logContainer.children.length > 20) logContainer.lastChild.remove();
+}
+
+console.log = function (...args) { logToScreen(args.join(' ')); originalLog.apply(console, args); };
+console.warn = function (...args) { logToScreen("WARN: " + args.join(' '), 'orange'); originalWarn.apply(console, args); };
+console.error = function (...args) { logToScreen("ERROR: " + args.join(' '), 'red'); originalError.apply(console, args); };
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x333333);
 
@@ -159,59 +180,59 @@ function initGUI() {
     // Gun
     const fGun = gui.addFolder('Weapon Config');
     fGun.add(guiParams, 'gunType', Object.keys(GUNS)).onChange(loadGun);
-    fGun.add(guiParams, 'parent', ['RightHand', 'Spine', 'Scene']).onChange(updateGunParent);
+    fGun.add(guiParams, 'parent', ['RightHand', 'Shooting', 'Spine', 'Scene']).onChange(updateGunParent);
     fGun.open();
 
     // Gun Transform
     const fTrans = gui.addFolder('Weapon Transform (Local)');
-    fTrans.add(guiParams, 'gx', -2, 2, 0.000001);
-    fTrans.add(guiParams, 'gy', -2, 2, 0.000001);
-    fTrans.add(guiParams, 'gz', -2, 2, 0.000001);
-    fTrans.add(guiParams, 'grx', -360, 360, 0.000001).name('Rot X (Deg)');
-    fTrans.add(guiParams, 'gry', -360, 360, 0.000001).name('Rot Y (Deg)');
-    fTrans.add(guiParams, 'grz', -360, 360, 0.000001).name('Rot Z (Deg)');
-    fTrans.add(guiParams, 'scale', 0.0001, 5.0, 0.000001);
+    fTrans.add(guiParams, 'gx', -2, 2, 0.000001).listen();
+    fTrans.add(guiParams, 'gy', -2, 2, 0.000001).listen();
+    fTrans.add(guiParams, 'gz', -2, 2, 0.000001).listen();
+    fTrans.add(guiParams, 'grx', -360, 360, 0.000001).name('Rot X (Deg)').listen();
+    fTrans.add(guiParams, 'gry', -360, 360, 0.000001).name('Rot Y (Deg)').listen();
+    fTrans.add(guiParams, 'grz', -360, 360, 0.000001).name('Rot Z (Deg)').listen();
+    fTrans.add(guiParams, 'scale', 0.0001, 5.0, 0.000001).listen();
     fTrans.open();
 
     // Bones
     const fBones = gui.addFolder('Right Arm Rotations');
-    fBones.add(guiParams, 'rArmX', -3.2, 3.2, 0.000001).name('R.Arm X');
-    fBones.add(guiParams, 'rArmY', -3.2, 3.2, 0.000001).name('R.Arm Y');
-    fBones.add(guiParams, 'rArmZ', -3.2, 3.2, 0.000001).name('R.Arm Z');
-    fBones.add(guiParams, 'rForeArmX', -3.2, 3.2, 0.000001).name('R.ForeArm X');
-    fBones.add(guiParams, 'rForeArmY', -3.2, 3.2, 0.000001).name('R.ForeArm Y');
-    fBones.add(guiParams, 'rForeArmZ', -3.2, 3.2, 0.000001).name('R.ForeArm Z');
-    fBones.add(guiParams, 'rHandX', -3.2, 3.2, 0.000001).name('R.Hand X');
-    fBones.add(guiParams, 'rHandY', -3.2, 3.2, 0.000001).name('R.Hand Y');
-    fBones.add(guiParams, 'rHandZ', -3.2, 3.2, 0.000001).name('R.Hand Z');
+    fBones.add(guiParams, 'rArmX', -3.2, 3.2, 0.000001).name('R.Arm X').listen();
+    fBones.add(guiParams, 'rArmY', -3.2, 3.2, 0.000001).name('R.Arm Y').listen();
+    fBones.add(guiParams, 'rArmZ', -3.2, 3.2, 0.000001).name('R.Arm Z').listen();
+    fBones.add(guiParams, 'rForeArmX', -3.2, 3.2, 0.000001).name('R.ForeArm X').listen();
+    fBones.add(guiParams, 'rForeArmY', -3.2, 3.2, 0.000001).name('R.ForeArm Y').listen();
+    fBones.add(guiParams, 'rForeArmZ', -3.2, 3.2, 0.000001).name('R.ForeArm Z').listen();
+    fBones.add(guiParams, 'rHandX', -3.2, 3.2, 0.000001).name('R.Hand X').listen();
+    fBones.add(guiParams, 'rHandY', -3.2, 3.2, 0.000001).name('R.Hand Y').listen();
+    fBones.add(guiParams, 'rHandZ', -3.2, 3.2, 0.000001).name('R.Hand Z').listen();
     fBones.open();
 
     const fRFingers = gui.addFolder('Right Hand Fingers (Curl)');
-    fRFingers.add(guiParams, 'rThumbCurl', -1.0, 3.0, 0.000001).name('Thumb');
-    fRFingers.add(guiParams, 'rIndexCurl', -1.0, 3.0, 0.000001).name('Index');
-    fRFingers.add(guiParams, 'rMiddleCurl', -1.0, 3.0, 0.000001).name('Middle');
-    fRFingers.add(guiParams, 'rRingCurl', -1.0, 3.0, 0.000001).name('Ring');
-    fRFingers.add(guiParams, 'rPinkyCurl', -1.0, 3.0, 0.000001).name('Pinky');
+    fRFingers.add(guiParams, 'rThumbCurl', -1.0, 3.0, 0.000001).name('Thumb').listen();
+    fRFingers.add(guiParams, 'rIndexCurl', -1.0, 3.0, 0.000001).name('Index').listen();
+    fRFingers.add(guiParams, 'rMiddleCurl', -1.0, 3.0, 0.000001).name('Middle').listen();
+    fRFingers.add(guiParams, 'rRingCurl', -1.0, 3.0, 0.000001).name('Ring').listen();
+    fRFingers.add(guiParams, 'rPinkyCurl', -1.0, 3.0, 0.000001).name('Pinky').listen();
     fRFingers.open();
 
     const fLeftBones = gui.addFolder('Left Arm Rotations');
-    fLeftBones.add(guiParams, 'lArmX', -3.2, 3.2, 0.000001).name('L.Arm X');
-    fLeftBones.add(guiParams, 'lArmY', -3.2, 3.2, 0.000001).name('L.Arm Y');
-    fLeftBones.add(guiParams, 'lArmZ', -3.2, 3.2, 0.000001).name('L.Arm Z');
-    fLeftBones.add(guiParams, 'lForeArmX', -3.2, 3.2, 0.000001).name('L.ForeArm X');
-    fLeftBones.add(guiParams, 'lForeArmY', -3.2, 3.2, 0.000001).name('L.ForeArm Y');
-    fLeftBones.add(guiParams, 'lForeArmZ', -3.2, 3.2, 0.000001).name('L.ForeArm Z');
-    fLeftBones.add(guiParams, 'lHandX', -3.2, 3.2, 0.000001).name('L.Hand X');
-    fLeftBones.add(guiParams, 'lHandY', -3.2, 3.2, 0.000001).name('L.Hand Y');
-    fLeftBones.add(guiParams, 'lHandZ', -3.2, 3.2, 0.000001).name('L.Hand Z');
+    fLeftBones.add(guiParams, 'lArmX', -3.2, 3.2, 0.000001).name('L.Arm X').listen();
+    fLeftBones.add(guiParams, 'lArmY', -3.2, 3.2, 0.000001).name('L.Arm Y').listen();
+    fLeftBones.add(guiParams, 'lArmZ', -3.2, 3.2, 0.000001).name('L.Arm Z').listen();
+    fLeftBones.add(guiParams, 'lForeArmX', -3.2, 3.2, 0.000001).name('L.ForeArm X').listen();
+    fLeftBones.add(guiParams, 'lForeArmY', -3.2, 3.2, 0.000001).name('L.ForeArm Y').listen();
+    fLeftBones.add(guiParams, 'lForeArmZ', -3.2, 3.2, 0.000001).name('L.ForeArm Z').listen();
+    fLeftBones.add(guiParams, 'lHandX', -3.2, 3.2, 0.000001).name('L.Hand X').listen();
+    fLeftBones.add(guiParams, 'lHandY', -3.2, 3.2, 0.000001).name('L.Hand Y').listen();
+    fLeftBones.add(guiParams, 'lHandZ', -3.2, 3.2, 0.000001).name('L.Hand Z').listen();
     fLeftBones.open();
 
     const fLFingers = gui.addFolder('Left Hand Fingers (Curl)');
-    fLFingers.add(guiParams, 'lThumbCurl', -1.0, 3.0, 0.000001).name('Thumb');
-    fLFingers.add(guiParams, 'lIndexCurl', -1.0, 3.0, 0.000001).name('Index');
-    fLFingers.add(guiParams, 'lMiddleCurl', -1.0, 3.0, 0.000001).name('Middle');
-    fLFingers.add(guiParams, 'lRingCurl', -1.0, 3.0, 0.000001).name('Ring');
-    fLFingers.add(guiParams, 'lPinkyCurl', -1.0, 3.0, 0.000001).name('Pinky');
+    fLFingers.add(guiParams, 'lThumbCurl', -1.0, 3.0, 0.000001).name('Thumb').listen();
+    fLFingers.add(guiParams, 'lIndexCurl', -1.0, 3.0, 0.000001).name('Index').listen();
+    fLFingers.add(guiParams, 'lMiddleCurl', -1.0, 3.0, 0.000001).name('Middle').listen();
+    fLFingers.add(guiParams, 'lRingCurl', -1.0, 3.0, 0.000001).name('Ring').listen();
+    fLFingers.add(guiParams, 'lPinkyCurl', -1.0, 3.0, 0.000001).name('Pinky').listen();
     fLFingers.open();
 
     gui.add(guiParams, 'logValues').name('LOG VALUES');
@@ -370,7 +391,11 @@ function loadGun() {
         currentGunMesh.rotation.order = 'YXZ';
 
         // Initial Context from current Parent selection
-        const context = (guiParams.parent === 'Spine') ? 'back' : 'hand';
+        const context = (guiParams.parent === 'Spine') ? 'back' : (guiParams.parent === 'Shooting' ? 'shoot' : 'hand');
+
+        // Attach Muzzle Helper
+        initMuzzleHelper();
+
         loadWrapper(guiParams.gunType, context);
     });
 }
@@ -404,7 +429,7 @@ function loadWrapper(gunType, context) {
 function updateGunParent(shouldLoad = true) {
     if (shouldLoad) {
         // If user changed parent in dropdown, we should load that context's data
-        const context = (guiParams.parent === 'Spine') ? 'back' : 'hand';
+        const context = (guiParams.parent === 'Spine') ? 'back' : (guiParams.parent === 'Shooting' ? 'shoot' : 'hand');
         loadWrapper(guiParams.gunType, context);
         return; // loadWrapper will call updateGunParent(false)
     }
@@ -414,7 +439,7 @@ function updateGunParent(shouldLoad = true) {
     let parent = scene;
     let parentName = "Scene (Ground)";
 
-    if (guiParams.parent === 'RightHand') {
+    if (guiParams.parent === 'RightHand' || guiParams.parent === 'Shooting') {
         if (bones.RightHand) {
             parent = bones.RightHand;
             parentName = "RightHand (" + bones.RightHand.name + ")";
@@ -569,7 +594,7 @@ async function saveCalibrationData() {
     delete data.save;
 
     // Determine Context: Hand or Back?
-    const context = (guiParams.parent === 'Spine') ? 'back' : 'hand';
+    const context = (guiParams.parent === 'Spine') ? 'back' : (guiParams.parent === 'Shooting' ? 'shoot' : 'hand');
 
     // KEY: sandbox_GunName_Context (e.g., sandbox_Sniper_hand)
     // We save this SPECIFIC STATE.
@@ -593,10 +618,63 @@ async function saveCalibrationData() {
     }
 }
 
+
+// --- MUZZLE HELPER ---
+let muzzleHelper;
+const muzzleMoveSpeed = 0.001; // Slow for precision
+
+function initMuzzleHelper() {
+    if (!currentGunMesh) return;
+
+    // Create Red Cube
+    const geo = new THREE.BoxGeometry(0.1, 0.1, 0.1); // 10cm cube? Maybe smaller?
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true });
+    muzzleHelper = new THREE.Mesh(geo, mat);
+
+    // Default pos (generic)
+    muzzleHelper.position.set(0, 0, 0.9);
+
+    currentGunMesh.add(muzzleHelper);
+
+    console.log("Muzzle Helper Attached. Use Arrow Keys to Move.");
+    logToScreen("🔴 Red Box attached! Use Arrow Keys (X/Z) & PageUp/Down (Y) to move.", "cyan");
+
+    // Add to GUI
+    if (!guiParams.showMuzzle) {
+        guiParams.showMuzzle = true;
+        const fDebug = gui.addFolder('Muzzle Calibration');
+        fDebug.add(guiParams, 'showMuzzle').name('Show Helper').onChange(v => muzzleHelper.visible = v);
+        fDebug.open();
+    }
+}
+
+// Add Keyboard listeners
+window.addEventListener('keydown', (e) => {
+    if (!muzzleHelper) return;
+
+    const step = e.shiftKey ? muzzleMoveSpeed * 10 : muzzleMoveSpeed;
+
+    switch (e.code) {
+        case 'ArrowUp': muzzleHelper.position.z += step; break;
+        case 'ArrowDown': muzzleHelper.position.z -= step; break;
+        case 'ArrowLeft': muzzleHelper.position.x += step; break;
+        case 'ArrowRight': muzzleHelper.position.x -= step; break; // Inverted X often matches screen?
+        case 'PageUp': muzzleHelper.position.y += step; break;
+        case 'PageDown': muzzleHelper.position.y -= step; break;
+        default: return;
+    }
+
+    const p = muzzleHelper.position;
+    const msg = `Muzzle Pos: x: ${p.x.toFixed(4)}, y: ${p.y.toFixed(4)}, z: ${p.z.toFixed(4)}`;
+    console.log(msg);
+    logToScreen(msg, 'yellow');
+});
+
+// Determine context... existing function
 async function loadCalibrationData(gunType, context) {
-    // If context not provided, guess? No, we demand context.
-    // context: 'hand' or 'back'
     if (!context) context = 'hand';
+    // ... existing content ...
+
 
     // Try specific key first: sandbox_Sniper_hand
     const typeKey = `sandbox_${gunType}_${context}`;
