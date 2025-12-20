@@ -65,6 +65,15 @@
             box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
         }
 
+        /* Red crosshair when aiming at enemy */
+        #crosshair.enemy::before {
+            border-color: rgba(255, 0, 0, 0.9);
+        }
+
+        #crosshair.enemy::after {
+            background-color: rgba(255, 0, 0, 0.9);
+        }
+
         /* DAMAGE OVERLAY */
         #damage-overlay {
             position: absolute;

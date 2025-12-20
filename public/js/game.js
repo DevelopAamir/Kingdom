@@ -1464,6 +1464,29 @@ function animate() {
             // 4. Update Bullets
 
 
+            // --- CROSSHAIR ENEMY DETECTION ---
+            if (myPlayerMesh && camera) {
+                const aimRaycaster = new THREE.Raycaster();
+                aimRaycaster.setFromCamera(new THREE.Vector2(0, 0), camera); // Center of screen
+
+                // Get all enemy meshes
+                const enemyMeshes = Object.values(otherPlayers).filter(m => m && !m.userData.isDead);
+
+                // Raycast against enemies
+                const aimIntersects = aimRaycaster.intersectObjects(enemyMeshes, true);
+
+                const crosshair = document.getElementById('crosshair');
+                if (crosshair) {
+                    if (aimIntersects.length > 0) {
+                        // Aiming at enemy - make crosshair red
+                        crosshair.classList.add('enemy');
+                    } else {
+                        // Not aiming at enemy - reset to white
+                        crosshair.classList.remove('enemy');
+                    }
+                }
+            }
+
             renderer.render(scene, camera);
         }
     }
