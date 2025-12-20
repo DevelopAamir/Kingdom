@@ -1,21 +1,25 @@
 {
-  "name": "battle-royale-mvp",
+  "name": "battle-royale-game",
   "version": "1.0.0",
-  "description": "A persistent web-based battle royale game using Three.js and Socket.io",
+  "description": "Multiplayer Battle Royale Game with Socket.IO",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "socket.io",
+    "battle-royale"
+  ],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "bcrypt": "^6.0.0",
     "express": "^4.18.2",
-    "socket.io": "^4.7.2",
-    "sqlite3": "^5.1.7"
+    "socket.io": "^4.6.1",
+    "sqlite3": "^5.1.6"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  },
-  "author": "Your Name",
-  "license": "ISC"
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
