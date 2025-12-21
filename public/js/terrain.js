@@ -139,17 +139,16 @@ window.TerrainSystem = (function () {
 
             const tree = model.clone();
 
-            // Calculate bounding box to offset tree so base is on ground
-            const box = new THREE.Box3().setFromObject(tree);
-            const treeHeight = box.max.y - box.min.y;
-            const yOffset = -box.min.y; // Offset to place bottom of tree at y=0 locally
-
-            // Scale first, then set position
+            // Scale the tree
             tree.scale.setScalar(treeData.scale || 1);
 
-            // Recalculate after scaling
-            const scaledOffset = yOffset * (treeData.scale || 1);
-            tree.position.set(treeData.x, treeData.y + scaledOffset, treeData.z);
+            // Calculate bounding box to find base offset
+            tree.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(tree);
+            const yOffset = -box.min.y; // Full offset to place base on ground
+
+            // Position tree on terrain with offset
+            tree.position.set(treeData.x, treeData.y + yOffset, treeData.z);
 
             tree.rotation.y = Math.random() * Math.PI * 2;
 
