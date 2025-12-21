@@ -170,6 +170,11 @@ async function spawnInitialWeapons() {
 io.on('connection', (socket) => {
     console.log('New connection:', socket.id);
 
+    // --- PING HANDLER (for latency measurement) ---
+    socket.on('ping', (callback) => {
+        if (typeof callback === 'function') callback();
+    });
+
     // --- AUTHENTICATION ---
 
     socket.on('signup', async (data) => {

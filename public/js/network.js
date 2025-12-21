@@ -2,10 +2,25 @@
 
 window.Network = {
     socket: null,
+    ping: 0,
 
     init: function () {
         this.socket = io();
         window.socket = this.socket; // Expose globally for terrain.js
+
+        // --- PING MEASUREMENT ---
+        const self = this;
+        setInterval(() => {
+            const start = Date.now();
+            self.socket.emit('ping', () => {
+                self.ping = Date.now() - start;
+                const pingEl = document.getElementById('ping-display');
+                if (pingEl) {
+                    pingEl.textContent = `Ping: ${self.ping}ms`;
+                    pingEl.style.color = self.ping < 50 ? '#88ff88' : self.ping < 100 ? '#ffff88' : '#ff8888';
+                }
+            });
+        }, 2000);
 
         // --- AUTHENTICATION LISTENERS ---
         this.socket.on('authError', (data) => {

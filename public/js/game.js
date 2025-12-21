@@ -937,6 +937,17 @@ function animate() {
         window.TerrainSystem.update(myPlayerMesh.position);
     }
 
+    // --- UPDATE COORDS DISPLAY ---
+    if (myPlayerMesh) {
+        const coordsEl = document.getElementById('coords-display');
+        if (coordsEl) {
+            const x = myPlayerMesh.position.x.toFixed(1);
+            const y = myPlayerMesh.position.y.toFixed(1);
+            const z = myPlayerMesh.position.z.toFixed(1);
+            coordsEl.textContent = `X: ${x} | Y: ${y} | Z: ${z}`;
+        }
+    }
+
     const time = Date.now() * 0.001;
 
     // --- BLOOD PARTICLES ---
