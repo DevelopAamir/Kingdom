@@ -118,31 +118,6 @@ function generateChunk(cx, cz) {
         });
     }
 
-
-    // --- WEAPON SPAWNING PER CHUNK ---
-    // Spawn random weapons in this chunk
-    // 3-6 guns per chunk (100x100) -> Much denser than before
-    const weaponCount = 3 + Math.floor(seededRandom(cx * cz + WORLD_SEED) * 4);
-    for (let i = 0; i < weaponCount; i++) {
-        const types = ['MPSD', 'Sniper'];
-        const type = types[Math.floor(seededRandom(cx * 100 + i) * types.length)];
-
-        const wx = worldX + seededRandom(cx * 50 + i) * CHUNK_SIZE;
-        const wz = worldZ + seededRandom(cz * 50 + i) * CHUNK_SIZE;
-        // Get height
-        const hi = Math.floor(((wx - worldX) / CHUNK_SIZE) * resolution);
-        const hj = Math.floor(((wz - worldZ) / CHUNK_SIZE) * resolution);
-        const wy = (heightmap[Math.min(hi, resolution)][Math.min(hj, resolution)] || 0) + 1.25; // +1.25 lift
-
-        const id = `gun_${cx}_${cz}_${i}_${Date.now()}`;
-
-        // Save to DB immediately (async but we don't await blocking generateChunk return)
-        db.saveWorldItem(id, type, wx, wy, wz).catch(e => console.error(e));
-
-        // Add to memory list for immediate nearby queries
-        worldItems[id] = { id, type, x: wx, y: wy, z: wz };
-    }
-
     return { cx, cz, heightmap, trees };
 }
 // Notify players within range of an event
@@ -172,21 +147,27 @@ async function initWorldItems() {
 }
 
 async function spawnInitialWeapons() {
+    // Clear all existing weapons first
+    await db.clearAllWorldItems();
+    worldItems = {};
+    console.log('Cleared all existing weapons from DB');
+
     const types = ['MPSD', 'Sniper'];
-    const SPAWN_COUNT = 300; // Increased from 80
-    const WORLD_RANGE = 600; // -300 to +300
+    const SPAWN_COUNT = 100; // Reduced density - spread across whole map
+    const WORLD_RANGE = 1000; // -500 to +500 (larger map coverage)
 
     for (let i = 0; i < SPAWN_COUNT; i++) {
         const type = types[i % 2];
         const x = (Math.random() - 0.5) * WORLD_RANGE;
         const z = (Math.random() - 0.5) * WORLD_RANGE;
-        const y = perlinNoise(x, z, WORLD_SEED) * 15 + 1.0; // Lift up +1.0 to avoid ground clipping
+        // Use terrain height formula for proper placement
+        const y = perlinNoise(x, z, WORLD_SEED) * 40 + 1.5; // Match terrain height (40) + lift
         const id = `weapon_${Date.now()}_${i}`;
 
         await db.saveWorldItem(id, type, x, y, z);
         worldItems[id] = { id, type, x, y, z };
     }
-    console.log(`Spawned ${SPAWN_COUNT} initial weapons.`);
+    console.log(`Spawned ${SPAWN_COUNT} weapons across ${WORLD_RANGE}x${WORLD_RANGE} world`);
 }
 
 io.on('connection', (socket) => {
@@ -453,7 +434,10 @@ app.get('/api/chunk/:cx/:cz', async (req, res) => {
 });
 
 // Initialize and start server
-initWorldItems().then(() => {
+initWorldItems().then(async () => {
+    // Spawn fresh weapons on server start
+    await spawnInitialWeapons();
+
     http.listen(3000, '0.0.0.0', () => {
         console.log('Battlefield server running on *:3000');
         console.log('Access via LAN: http://192.168.1.145:3000 (or your machine IP)');

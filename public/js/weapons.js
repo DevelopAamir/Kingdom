@@ -487,9 +487,9 @@ window.spawnWorldGun = function (type, pos, itemId = null) {
         const mesh = gltf.scene;
         // Scale tuning based on weapon type
         if (type === 'MPSD') {
-            mesh.scale.set(3.0, 3.0, 3.0); // Doubled from 1.5
+            mesh.scale.set(3.0, 3.0, 3.0); // Visible size
         } else if (type === 'Sniper') {
-            mesh.scale.set(0.7, 0.7, 0.7); // Roughly half of 1.5
+            mesh.scale.set(0.4, 0.4, 0.4); // Smaller - sniper model is large
         } else {
             mesh.scale.set(1.5, 1.5, 1.5); // Default
         }

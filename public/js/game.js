@@ -256,9 +256,18 @@ function initGame(playerData) {
     }
 
     // Request world items from server (instead of hardcoded spawns)
+    // Initial request + set up periodic requests as player moves
     setTimeout(() => {
         if (Network.socket) {
-            Network.getWorldItems(playerData.x || 0, playerData.z || 0, 100);
+            Network.getWorldItems(playerData.x || 0, playerData.z || 0, 200);
+
+            // Continuously request nearby items as player moves
+            setInterval(() => {
+                if (window.myPlayerMesh) {
+                    const pos = window.myPlayerMesh.position;
+                    Network.getWorldItems(pos.x, pos.z, 150);
+                }
+            }, 2000); // Every 2 seconds
         }
     }, 500); // Small delay to ensure socket is connected
 

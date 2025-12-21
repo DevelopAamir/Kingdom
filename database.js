@@ -168,6 +168,15 @@ const Database = {
                 else resolve();
             });
         });
+    },
+
+    clearAllWorldItems: () => {
+        return new Promise((resolve, reject) => {
+            db.run(`DELETE FROM world_items`, [], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
     }
 };
 
