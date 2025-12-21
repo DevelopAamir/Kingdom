@@ -133,6 +133,11 @@ window.TerrainSystem = (function () {
 
         if (!chunkData.trees) return trees;
 
+        // Pre-calculate chunk info for height sampling
+        const resolution = chunkData.heightmap.length - 1;
+        const chunkWorldX = chunkData.cx * CHUNK_SIZE;
+        const chunkWorldZ = chunkData.cz * CHUNK_SIZE;
+
         chunkData.trees.forEach(treeData => {
             const model = treeModels[treeData.type];
             if (!model) return;
@@ -147,8 +152,37 @@ window.TerrainSystem = (function () {
             const box = new THREE.Box3().setFromObject(tree);
             const yOffset = -box.min.y; // Full offset to place base on ground
 
+            // RECALCULATE Y from local heightmap (fixes server/client coordinate mismatch)
+            // Server uses heightmap[hi][hj], but terrain mesh uses swapped indices heightmap[j][i]
+            // We sample using the same logic as the terrain mesh for perfect alignment
+            const localX = treeData.x - chunkWorldX;
+            const localZ = treeData.z - chunkWorldZ;
+
+            // Convert to heightmap indices with bilinear interpolation
+            const fx = (localX / CHUNK_SIZE) * resolution;
+            const fz = (localZ / CHUNK_SIZE) * resolution;
+
+            const i0 = Math.max(0, Math.min(Math.floor(fx), resolution));
+            const j0 = Math.max(0, Math.min(Math.floor(fz), resolution));
+            const i1 = Math.min(i0 + 1, resolution);
+            const j1 = Math.min(j0 + 1, resolution);
+
+            const fracX = fx - Math.floor(fx);
+            const fracZ = fz - Math.floor(fz);
+
+            // Sample heights - use same index order as terrain mesh: heightmap[xIndex][zIndex]
+            const h00 = chunkData.heightmap[i0]?.[j0] || 0;
+            const h10 = chunkData.heightmap[i1]?.[j0] || 0;
+            const h01 = chunkData.heightmap[i0]?.[j1] || 0;
+            const h11 = chunkData.heightmap[i1]?.[j1] || 0;
+
+            // Bilinear interpolation for smooth placement
+            const h0 = h00 * (1 - fracX) + h10 * fracX;
+            const h1 = h01 * (1 - fracX) + h11 * fracX;
+            const groundY = h0 * (1 - fracZ) + h1 * fracZ;
+
             // Position tree on terrain with offset
-            tree.position.set(treeData.x, treeData.y + yOffset, treeData.z);
+            tree.position.set(treeData.x, groundY + yOffset, treeData.z);
 
             tree.rotation.y = Math.random() * Math.PI * 2;
 
