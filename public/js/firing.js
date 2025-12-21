@@ -292,7 +292,7 @@ window.FiringSystem = {
         }
 
         // EXECUTE SHOT
-        this.executeShot(true); // isLocal = true
+        this.executeShot(true, window.myPlayerMesh); // isLocal = true
 
         // Mark single-shot weapons as fired and auto-reload
         if (!isAutomatic) {
@@ -306,6 +306,9 @@ window.FiringSystem = {
 
     // Main Shot Logic (Called by local input OR network event)
     executeShot: function (isLocal, shooterMesh) {
+        // Fallback for local player if mesh not passed
+        if (isLocal && !shooterMesh) shooterMesh = window.myPlayerMesh;
+
         let startPos = new THREE.Vector3();
         let direction = new THREE.Vector3();
         let aimTarget = null; // Store for visual tracer
