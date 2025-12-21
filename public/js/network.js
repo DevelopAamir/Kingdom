@@ -80,6 +80,7 @@ window.Network = {
         this.socket.on('newPlayer', (data) => addEnemy(data.id, data.player));
 
         this.socket.on('playerMoved', (data) => {
+
             if (window.otherPlayers && window.otherPlayers[data.id]) {
                 const op = window.otherPlayers[data.id];
                 if (op.userData && op.userData.isDead) return;

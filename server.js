@@ -262,6 +262,7 @@ io.on('connection', (socket) => {
     });
 
     // --- GAMEPLAY ---
+    const UPDATE_RADIUS = 200; // Only send updates to players within this range
 
     socket.on('playerMovement', (movementData) => {
         if (players[socket.id]) {
@@ -273,13 +274,49 @@ io.on('connection', (socket) => {
             p.pitch = movementData.pitch;
             p.equippedSlot = movementData.equippedSlot;
 
-            socket.broadcast.emit('playerMoved', { id: socket.id, ...p });
+            const packet = { id: socket.id, ...p };
+
+            // Broadcast only to nearby players
+            for (const targetId in players) {
+                if (targetId === socket.id) continue;
+
+                const target = players[targetId];
+                if (!target) continue;
+
+                const dx = p.x - target.x;
+                const dy = p.y - target.y;
+                const dz = p.z - target.z;
+                const distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < UPDATE_RADIUS * UPDATE_RADIUS) {
+                    io.to(targetId).emit('playerMoved', packet);
+                }
+            }
         }
     });
 
     socket.on('shoot', () => {
         // Visual only: tell others I shot
-        socket.broadcast.emit('playerShoot', { id: socket.id });
+        if (players[socket.id]) {
+            const p = players[socket.id];
+
+            // Broadcast only to nearby players
+            for (const targetId in players) {
+                if (targetId === socket.id) continue;
+
+                const target = players[targetId];
+                if (!target) continue;
+
+                const dx = p.x - target.x;
+                const dy = p.y - target.y;
+                const dz = p.z - target.z;
+                const distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < UPDATE_RADIUS * UPDATE_RADIUS) {
+                    io.to(targetId).emit('playerShoot', { id: socket.id });
+                }
+            }
+        }
     });
 
     socket.on('playerHit', (data) => {

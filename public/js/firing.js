@@ -19,21 +19,138 @@ window.FiringSystem = {
     RECOIL_RECOVERY_SPEED: 8, // How fast camera recovers
     currentRecoil: 0, // Current recoil offset applied to pitch
 
-    // Audio
-    sfxShoot: null,
+    // Audio - weapon-specific sounds
+    sfxWeapons: {
+        'MPSD': {
+            shoot: null,
+            reload: null
+        },
+        'Sniper': {
+            shoot: null,
+            reload: null
+        }
+    },
+    sfxShoot: null, // Fallback
+    currentPlayingSound: null, // Track active firing sound for stopping
 
     init: function (scene) {
         this.scene = scene;
         console.log("FiringSystem Initialized");
 
-        // Load Audio
-        this.sfxShoot = new Audio('sound-effect/jumpland.wav'); // Placeholder until gunshot_legacy.mp3 is added
+        // Load weapon-specific audio
+        this.sfxWeapons['MPSD'].shoot = new Audio('sound-effect/mpsd-fire.mp3');
+        this.sfxWeapons['MPSD'].reload = new Audio('sound-effect/mpsd-reload.mp3');
+        this.sfxWeapons['Sniper'].shoot = new Audio('sound-effect/sniper-shoot.mp3');
+        this.sfxWeapons['Sniper'].reload = new Audio('sound-effect/reload-sniper.mp3');
+
+        // Fallback
+        this.sfxShoot = new Audio('sound-effect/mpsd-fire.mp3');
     },
+
+    // Reload state
+    isReloading: false,
+    reloadTimer: 0,
 
     update: function (dt) {
         this.handleInput(dt);
         this.updateBullets(dt);
         this.updateRecoil(dt);
+        this.updateReload(dt);
+        this.updateAmmoUI();
+    },
+
+    // Update reload timer
+    updateReload: function (dt) {
+        if (this.isReloading) {
+            this.reloadTimer -= dt;
+            if (this.reloadTimer <= 0) {
+                this.finishReload();
+            }
+        }
+    },
+
+    // Update ammo UI
+    updateAmmoUI: function () {
+        const ammoEl = document.getElementById('ammo-display');
+        if (!ammoEl) return;
+
+        if (!window.myPlayerMesh || !window.myPlayerMesh.userData) {
+            ammoEl.textContent = '-- / --';
+            return;
+        }
+
+        const ud = window.myPlayerMesh.userData;
+        if (ud.equippedSlot === null || ud.equippedSlot === undefined || !ud.backGuns || !ud.backGuns[ud.equippedSlot]) {
+            ammoEl.textContent = '-- / --';
+            return;
+        }
+
+        const gun = ud.backGuns[ud.equippedSlot];
+        const type = gun.userData?.pickupType || 'MPSD';
+        const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+        const magSize = spec ? spec.magSize : 30;
+        const currentAmmo = gun.userData.currentAmmo !== undefined ? gun.userData.currentAmmo : magSize;
+
+        if (this.isReloading) {
+            ammoEl.textContent = 'RELOADING...';
+            ammoEl.style.color = '#ffff00';
+        } else {
+            ammoEl.textContent = `${currentAmmo} / ${magSize}`;
+            ammoEl.style.color = currentAmmo > 0 ? '#ff9944' : '#ff4444';
+        }
+    },
+
+    // Initiate reload
+    reload: function () {
+        if (this.isReloading) return;
+        if (!window.myPlayerMesh || !window.myPlayerMesh.userData) return;
+
+        const ud = window.myPlayerMesh.userData;
+        if (ud.equippedSlot === null || !ud.backGuns || !ud.backGuns[ud.equippedSlot]) return;
+
+        const gun = ud.backGuns[ud.equippedSlot];
+        const type = gun.userData?.pickupType || 'MPSD';
+        const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+        const magSize = spec ? spec.magSize : 30;
+        const reloadTime = spec ? spec.reloadTime : 2.0;
+        const currentAmmo = gun.userData.currentAmmo !== undefined ? gun.userData.currentAmmo : magSize;
+
+        // Don't reload if already full
+        if (currentAmmo >= magSize) return;
+
+        this.isReloading = true;
+        this.reloadTimer = reloadTime;
+
+        // Play reload sound
+        const weaponSfx = this.sfxWeapons[type];
+        if (weaponSfx && weaponSfx.reload) {
+            const s = weaponSfx.reload.cloneNode();
+            s.volume = 0.5;
+            s.play().catch(e => { });
+        }
+
+        console.log(`[Firing] Reloading ${type}... (${reloadTime}s)`);
+    },
+
+    // Complete reload
+    finishReload: function () {
+        if (!window.myPlayerMesh || !window.myPlayerMesh.userData) return;
+
+        const ud = window.myPlayerMesh.userData;
+        if (ud.equippedSlot === null || !ud.backGuns || !ud.backGuns[ud.equippedSlot]) {
+            this.isReloading = false;
+            return;
+        }
+
+        const gun = ud.backGuns[ud.equippedSlot];
+        const type = gun.userData?.pickupType || 'MPSD';
+        const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+        const magSize = spec ? spec.magSize : 30;
+
+        gun.userData.currentAmmo = magSize;
+        this.isReloading = false;
+
+        console.log(`[Firing] Reload complete! Ammo: ${magSize}`);
     },
 
     updateRecoil: function (dt) {
@@ -82,10 +199,39 @@ window.FiringSystem = {
         } else {
             // Reset single-shot flag when trigger is released
             this.hasFiredThisTrigger = false;
+
+            // Stop any playing firing sound immediately (only for automatic weapons)
+            if (this.currentPlayingSound && this.isCurrentWeaponAutomatic()) {
+                this.currentPlayingSound.pause();
+                this.currentPlayingSound.currentTime = 0;
+                this.currentPlayingSound = null;
+            }
         }
     },
 
+    // Check if current weapon is automatic
+    isCurrentWeaponAutomatic: function () {
+        if (!window.myPlayerMesh || !window.myPlayerMesh.userData) return true;
+        const ud = window.myPlayerMesh.userData;
+        if (ud.equippedSlot === null || !ud.backGuns || !ud.backGuns[ud.equippedSlot]) return true;
+
+        const gun = ud.backGuns[ud.equippedSlot];
+        const type = gun.userData?.pickupType || 'MPSD';
+        const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+
+        return spec ? spec.isAutomatic !== false : true;
+    },
+
     attemptShoot: function () {
+        // Check if weapon is equipped
+        if (!window.myPlayerMesh || !window.myPlayerMesh.userData) return;
+        const ud = window.myPlayerMesh.userData;
+
+        if (ud.equippedSlot === null || ud.equippedSlot === undefined || !ud.backGuns || !ud.backGuns[ud.equippedSlot]) {
+            // No weapon equipped, cannot shoot
+            return;
+        }
+
         const now = Date.now() / 1000;
 
         // Get current weapon spec
@@ -106,10 +252,30 @@ window.FiringSystem = {
             }
         }
 
+        // Cannot shoot while reloading
+        if (this.isReloading) return;
+
+        // Check ammo
+        const gun = ud.backGuns[ud.equippedSlot];
+        const type = gun.userData.pickupType || 'MPSD';
+        const spec = window.WEAPON_SPECS ? window.WEAPON_SPECS[type] : null;
+        const magSize = spec ? spec.magSize : 30;
+
+        // Initialize ammo if not set
+        if (gun.userData.currentAmmo === undefined) {
+            gun.userData.currentAmmo = magSize;
+        }
+
+        // Check if out of ammo
+        if (gun.userData.currentAmmo <= 0) {
+            // Auto-reload
+            this.reload();
+            return;
+        }
+
         // For non-automatic weapons (like Sniper), require trigger release between shots
         if (!isAutomatic) {
             if (this.hasFiredThisTrigger) return; // Already fired this trigger press
-            // Don't set flag yet - wait until after shot fires
         }
 
         // Fire Rate Check
@@ -117,16 +283,24 @@ window.FiringSystem = {
 
         this.lastFireTime = now;
 
+        // Consume ammo
+        gun.userData.currentAmmo--;
+
+        // For sniper (non-automatic), close scope immediately BEFORE shot effects
+        if (!isAutomatic && window.Controls && window.Controls.isScoped) {
+            window.Controls.unscope();
+        }
+
         // EXECUTE SHOT
         this.executeShot(true); // isLocal = true
 
-        // Mark single-shot weapons as fired AFTER shot executes
-        // This allows firing pose to show briefly before switching back
+        // Mark single-shot weapons as fired and auto-reload
         if (!isAutomatic) {
-            // Use a small delay so the firing pose shows momentarily
             setTimeout(() => {
                 this.hasFiredThisTrigger = true;
-            }, 100); // 100ms delay to show firing pose
+                // Sniper auto-reload after shot
+                this.reload();
+            }, 300);
         }
     },
 
@@ -232,11 +406,58 @@ window.FiringSystem = {
         }
 
         // --- B. AUDIO ---
-        // Simple clone and play
-        if (this.sfxShoot) {
-            const s = this.sfxShoot.cloneNode();
-            s.volume = isLocal ? 0.3 : 0.1; // Louder for self
+        // Get weapon type for correct sound
+        // --- B. AUDIO ---
+        // Get weapon type for correct sound
+        let weaponType = 'MPSD'; // Default
+
+        if (shooterMesh && shooterMesh.userData) {
+            const ud = shooterMesh.userData;
+            if (ud.equippedSlot !== null && ud.backGuns && ud.backGuns[ud.equippedSlot]) {
+                const gun = ud.backGuns[ud.equippedSlot];
+                if (gun && gun.userData) {
+                    weaponType = gun.userData.pickupType || 'MPSD';
+                }
+            }
+        }
+
+        // Play weapon-specific sound
+        const weaponSfx = this.sfxWeapons[weaponType];
+        let soundToPlay = weaponSfx && weaponSfx.shoot ? weaponSfx.shoot : this.sfxShoot;
+
+        if (soundToPlay) {
+            let volume = 0.4; // Default for local
+
+            if (!isLocal && shooterMesh && window.myPlayerMesh) {
+                // Calculate distance to shooter for volume falloff
+                const shooterPos = new THREE.Vector3();
+                shooterMesh.getWorldPosition(shooterPos);
+                const myPos = window.myPlayerMesh.position;
+                const distance = shooterPos.distanceTo(myPos);
+
+                // Sound falloff: full volume within 10 units, silent beyond 50 units
+                const maxDistance = 50;
+                const minDistance = 10;
+
+                if (distance > maxDistance) {
+                    // Too far, don't play sound at all
+                    return;
+                } else if (distance > minDistance) {
+                    // Linear falloff between min and max distance
+                    volume = 0.3 * (1 - (distance - minDistance) / (maxDistance - minDistance));
+                } else {
+                    volume = 0.3; // Close by, full remote volume
+                }
+            }
+
+            const s = soundToPlay.cloneNode();
+            s.volume = volume;
             s.play().catch(e => { });
+
+            // Track sound for automatic weapons so we can stop it
+            if (isLocal) {
+                this.currentPlayingSound = s;
+            }
         }
 
         // --- C. RAYCAST (Hit Detection) ---

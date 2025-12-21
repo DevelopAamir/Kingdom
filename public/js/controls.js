@@ -16,6 +16,8 @@ window.Controls = {
     joystickVector: { x: 0, y: 0 },
     isSprintToggled: false, // Mobile toggle
     isJoystickActive: false, // Track if joystick is currently being used
+    isScoped: false, // Scope/ADS state
+    defaultFOV: 75, // Default camera FOV
 
     // Init Listeners
     init: function (camera, yawObject, pitchObject) {
@@ -29,6 +31,11 @@ window.Controls = {
         document.addEventListener('mousemove', (e) => this.onMouseMove(e));
         document.addEventListener('mousedown', (e) => this.onMouseDown(e));
         document.addEventListener('mouseup', (e) => this.onMouseUp(e));
+
+        // Prevent right-click context menu (for scope)
+        document.addEventListener('contextmenu', (e) => {
+            if (this.isLocked) e.preventDefault();
+        });
 
         // Pointer Lock Change
         document.addEventListener('pointerlockchange', () => {
@@ -71,6 +78,9 @@ window.Controls = {
         if (key === '3' && window.toggleWeapon) window.toggleWeapon(2);
         if (key === '4' && window.toggleWeapon) window.toggleWeapon(3);
 
+        // Reload (R key)
+        if (key === 'r' && window.FiringSystem) window.FiringSystem.reload();
+
         if (key === ' ') this.keys[' '] = true;
         else if (key === 'shift') {
             if (!e.repeat) {
@@ -104,12 +114,19 @@ window.Controls = {
     },
 
     onMouseDown: function (e) {
+        console.log('[Controls] onMouseDown button:', e.button, 'isLocked:', this.isLocked);
+
         // Check if player is dead - disable firing
         const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
         if (isDead) return;
 
         if (this.isLocked) {
-            this.isFiring = true;
+            if (e.button === 0) { // Left click - fire
+                this.isFiring = true;
+            } else if (e.button === 2) { // Right click - scope
+                console.log('[Controls] Right click detected, calling toggleScope');
+                this.toggleScope();
+            }
         } else {
             // Try to lock on click if appropriate (e.g. valid game state)
             if (document.body.requestPointerLock && !window.isCalibrationMode) {
@@ -119,7 +136,93 @@ window.Controls = {
     },
 
     onMouseUp: function (e) {
-        this.isFiring = false;
+        if (e.button === 0) { // Left click
+            this.isFiring = false;
+        }
+        // Right click scope toggle is on mousedown, not mouseup
+    },
+
+    // --- SCOPE TOGGLE ---
+    toggleScope: function () {
+        console.log('[Controls] toggleScope called');
+
+        // Get weapon type if equipped using correct data structure
+        let gunType = '';
+        let hasWeapon = false;
+
+        if (window.myPlayerMesh && window.myPlayerMesh.userData) {
+            const ud = window.myPlayerMesh.userData;
+            if (ud.equippedSlot !== null && ud.equippedSlot !== undefined && ud.backGuns && ud.backGuns[ud.equippedSlot]) {
+                const gun = ud.backGuns[ud.equippedSlot];
+                gunType = gun.userData?.pickupType || '';
+                hasWeapon = true;
+            }
+        }
+        console.log('[Controls] Gun type:', gunType, 'hasWeapon:', hasWeapon);
+
+        // Require weapon to be equipped to scope
+        if (!hasWeapon) {
+            console.log('[Controls] No weapon equipped, cannot scope');
+            return;
+        }
+
+        this.isScoped = !this.isScoped;
+        console.log('[Controls] isScoped:', this.isScoped);
+
+        const overlay = document.getElementById('scope-overlay');
+        const crosshair = document.getElementById('crosshair');
+        const zoomLabel = document.getElementById('scope-zoom-label');
+
+        if (this.isScoped) {
+            // Determine zoom level by weapon type
+            let zoomFOV = 40; // Default 4x
+            let zoomText = '4x';
+
+            console.log('[Controls] Checking gun type for scope:', gunType);
+
+            if (gunType === 'Sniper' || gunType.toLowerCase().includes('sniper')) {
+                zoomFOV = 10; // 8x scope for sniper
+                zoomText = '8x';
+                console.log('[Controls] Sniper detected - 8x zoom');
+            } else if (gunType === 'MPSD' || gunType.toLowerCase().includes('mpsd')) {
+                zoomFOV = 20; // 4x scope for MPSD
+                zoomText = '4x';
+                console.log('[Controls] MPSD detected - 4x zoom');
+            }
+
+            // Apply zoom
+            if (this.camera) {
+                this.camera.fov = zoomFOV;
+                this.camera.updateProjectionMatrix();
+            }
+
+            // Show scope overlay
+            if (overlay) overlay.style.display = 'block';
+            if (crosshair) crosshair.style.visibility = 'hidden'; // Use visibility to preserve layout
+            if (zoomLabel) zoomLabel.textContent = zoomText;
+        } else {
+            // Reset to default FOV
+            if (this.camera) {
+                this.camera.fov = this.defaultFOV;
+                this.camera.updateProjectionMatrix();
+            }
+
+            // Hide scope overlay
+            if (overlay) overlay.style.display = 'none';
+            if (crosshair) crosshair.style.visibility = 'visible'; // Restore crosshair
+        }
+    },
+
+    // API to check scope state
+    getIsScoped: function () {
+        return this.isScoped;
+    },
+
+    // Unscope (for sniper after shot)
+    unscope: function () {
+        if (this.isScoped) {
+            this.toggleScope();
+        }
     },
 
     // --- MOBILE CONTROLS ---
@@ -205,6 +308,26 @@ window.Controls = {
                 this.isSprintToggled = !this.isSprintToggled;
                 this.keys.Shift = this.isSprintToggled;
                 this.syncRunButton();
+            });
+        }
+
+        // Scope button (mobile)
+        const scopeBtn = document.getElementById('scope-btn');
+        if (scopeBtn) {
+            scopeBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+                if (!isDead) this.toggleScope();
+            });
+        }
+
+        // Reload button (mobile)
+        const reloadBtn = document.getElementById('reload-btn');
+        if (reloadBtn) {
+            reloadBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+                if (!isDead && window.FiringSystem) window.FiringSystem.reload();
             });
         }
 

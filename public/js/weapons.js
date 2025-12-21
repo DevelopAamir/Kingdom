@@ -75,7 +75,9 @@ window.WEAPON_SPECS = {
         // Weapon Stats
         damage: { body: 10, head: 50 },
         fireRate: 0.15,
-        isAutomatic: true
+        isAutomatic: true,
+        magSize: 60,
+        reloadTime: 2.0  // seconds
     },
     'Sniper': {
         back: {
@@ -107,7 +109,9 @@ window.WEAPON_SPECS = {
         // Weapon Stats
         damage: { body: 150, head: 800 },
         fireRate: 1.0,
-        isAutomatic: false  // Single-shot only
+        isAutomatic: false,  // Single-shot only
+        magSize: 1,
+        reloadTime: 1.5  // seconds (bolt action)
     }
 };
 
@@ -275,6 +279,11 @@ window.toggleWeapon = function (slot) {
         return;
     }
 
+    // Close scope if scoped when switching weapons
+    if (window.Controls && window.Controls.isScoped) {
+        window.Controls.unscope();
+    }
+
     // Check if we have a weapon in that slot
     if (!ud.backGuns || !ud.backGuns[slot]) return;
 
@@ -397,6 +406,16 @@ window.equipWeapon = function (slot, targetPlayer = myPlayerMesh) {
             ud.equippedSlot = slot;
             ud.isSwitchingWeapon = false; // Animation complete
 
+            // Play reload sound when equipping (taking from back to hand)
+            if (targetPlayer === myPlayerMesh && window.FiringSystem && window.FiringSystem.sfxWeapons) {
+                const weaponSfx = window.FiringSystem.sfxWeapons[type];
+                if (weaponSfx && weaponSfx.reload) {
+                    const s = weaponSfx.reload.cloneNode();
+                    s.volume = 0.4;
+                    s.play().catch(e => { });
+                }
+            }
+
             if (targetPlayer === myPlayerMesh) console.log(`Equipped Weapon ${slot + 1}`);
         }, 300); // 300ms delay for animation
     } else {
@@ -420,6 +439,17 @@ window.equipWeapon = function (slot, targetPlayer = myPlayerMesh) {
         gunMesh.rotation.order = 'YXZ';
 
         ud.equippedSlot = slot;
+
+        // Play reload sound when equipping (taking from back to hand)
+        if (targetPlayer === myPlayerMesh && window.FiringSystem && window.FiringSystem.sfxWeapons) {
+            const weaponSfx = window.FiringSystem.sfxWeapons[type];
+            if (weaponSfx && weaponSfx.reload) {
+                const s = weaponSfx.reload.cloneNode();
+                s.volume = 0.4;
+                s.play().catch(e => { });
+            }
+        }
+
         if (targetPlayer === myPlayerMesh) console.log(`Equipped Weapon ${slot + 1}`);
     }
 };
