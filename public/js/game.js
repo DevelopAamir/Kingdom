@@ -172,8 +172,12 @@ function initGame(playerData) {
         window.myPlayerMesh.userData.isLocal = true;
         window.scene.add(window.myPlayerMesh);
 
-        // Initial Position Check (waiting for server but set safe default)
-        myPlayerMesh.position.set(0, 0, 0);
+        // Set position from server (saved location or default)
+        const savedX = playerData.x || 0;
+        const savedZ = playerData.z || 0;
+        const savedY = playerData.y || 0;
+        myPlayerMesh.position.set(savedX, savedY, savedZ);
+        console.log(`[Game] Player spawned at saved position: (${savedX}, ${savedY}, ${savedZ})`);
 
         // Load saved inventory weapons
         if (playerData.inventory && playerData.inventory.length > 0) {
@@ -1114,7 +1118,7 @@ function animate() {
 
         // 3. Apply Velocity
         let baseSpeed = 0.1;
-        if (isSprintToggled) baseSpeed = 0.12; // 20% faster (adjusted from 0.15)
+        if (isSprintToggled) baseSpeed = 0.12; // 20% faster
 
         const speed = baseSpeed * timeScale; // Adjusted for Delta Time
 
@@ -1200,20 +1204,25 @@ function animate() {
         // --- JUMP & GRAVITY ---
         if (myPlayerMesh.userData.velocityY === undefined) myPlayerMesh.userData.velocityY = 0;
 
-        // Gravity
-        myPlayerMesh.userData.velocityY -= 0.015 * timeScale; // Gravity strength
-        myPlayerMesh.position.y += myPlayerMesh.userData.velocityY * timeScale;
-
         // Get terrain height at player position
         const groundHeight = window.TerrainSystem
             ? window.TerrainSystem.getHeightAt(myPlayerMesh.position.x, myPlayerMesh.position.z)
             : 0;
 
+        // If grounded and moving, snap to terrain (prevents downhill falling/landing flicker)
+        if (myPlayerMesh.userData.isGrounded && isMoving) {
+            myPlayerMesh.position.y = groundHeight;
+            myPlayerMesh.userData.velocityY = 0;
+        } else {
+            // Apply gravity when in air or standing still
+            myPlayerMesh.userData.velocityY -= 0.015 * timeScale; // Gravity strength
+            myPlayerMesh.position.y += myPlayerMesh.userData.velocityY * timeScale;
+        }
+
         // Ground Collision
         let isGrounded = false;
         if (myPlayerMesh.position.y <= groundHeight) {
             // Play Landing Sound only for significant falls (not walking downhill)
-            // -0.1 threshold = roughly 0.15m/frame fall at 60fps, filters out slope walking
             if (!myPlayerMesh.userData.isGrounded && myPlayerMesh.userData.velocityY < -0.1) {
                 playSound(SFX_JUMP, VOL_JUMP);
             }
@@ -1223,7 +1232,6 @@ function animate() {
             isGrounded = true;
         }
 
-        // Jump Input
         // Jump Input
         if (jumpInput && isGrounded) {
             myPlayerMesh.userData.velocityY = 0.22; // Initial Jump Velocity (per 16ms unit)

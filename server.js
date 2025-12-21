@@ -88,7 +88,7 @@ function generateChunk(cx, cz) {
             const wz = worldZ + (j / resolution) * CHUNK_SIZE;
 
             // Multi-octave noise for mountains
-            const height = perlinNoise(wx, wz, WORLD_SEED) * 15; // Max 15 units height
+            const height = perlinNoise(wx, wz, WORLD_SEED) * 40; // Max 40 units height (tall mountains)
             heightmap[i][j] = height;
         }
     }

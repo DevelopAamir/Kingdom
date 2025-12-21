@@ -300,7 +300,7 @@ window.TerrainSystem = (function () {
     // Trunk collision radius per type (actual trunk width)
     const TRUNK_COLLISION_RADIUS = {
         'Pine Tree': 0.4,  // Thin pine trunk
-        'Tree': 2.0,       // Large leafy tree - thick trunk
+        'Tree': 1.0,       // Large leafy tree - thick trunk
         'Tree2': 2.5,      // Even larger tree
         'Big Tree': 3.0
     };
