@@ -485,8 +485,14 @@ window.spawnWorldGun = function (type, pos, itemId = null) {
 
     loader.load(url, (gltf) => {
         const mesh = gltf.scene;
-        // Scale might need tuning per model. 
-        mesh.scale.set(1.5, 1.5, 1.5);
+        // Scale tuning based on weapon type
+        if (type === 'MPSD') {
+            mesh.scale.set(3.0, 3.0, 3.0); // Doubled from 1.5
+        } else if (type === 'Sniper') {
+            mesh.scale.set(0.7, 0.7, 0.7); // Roughly half of 1.5
+        } else {
+            mesh.scale.set(1.5, 1.5, 1.5); // Default
+        }
 
         mesh.position.copy(pos);
         // Keep Y from pos if provided (terrain-aware), else default float

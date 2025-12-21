@@ -118,9 +118,33 @@ function generateChunk(cx, cz) {
         });
     }
 
+
+    // --- WEAPON SPAWNING PER CHUNK ---
+    // Spawn random weapons in this chunk
+    // 3-6 guns per chunk (100x100) -> Much denser than before
+    const weaponCount = 3 + Math.floor(seededRandom(cx * cz + WORLD_SEED) * 4);
+    for (let i = 0; i < weaponCount; i++) {
+        const types = ['MPSD', 'Sniper'];
+        const type = types[Math.floor(seededRandom(cx * 100 + i) * types.length)];
+
+        const wx = worldX + seededRandom(cx * 50 + i) * CHUNK_SIZE;
+        const wz = worldZ + seededRandom(cz * 50 + i) * CHUNK_SIZE;
+        // Get height
+        const hi = Math.floor(((wx - worldX) / CHUNK_SIZE) * resolution);
+        const hj = Math.floor(((wz - worldZ) / CHUNK_SIZE) * resolution);
+        const wy = (heightmap[Math.min(hi, resolution)][Math.min(hj, resolution)] || 0) + 1.25; // +1.25 lift
+
+        const id = `gun_${cx}_${cz}_${i}_${Date.now()}`;
+
+        // Save to DB immediately (async but we don't await blocking generateChunk return)
+        db.saveWorldItem(id, type, wx, wy, wz).catch(e => console.error(e));
+
+        // Add to memory list for immediate nearby queries
+        worldItems[id] = { id, type, x: wx, y: wy, z: wz };
+    }
+
     return { cx, cz, heightmap, trees };
 }
-
 // Notify players within range of an event
 function notifyNearby(eventX, eventZ, eventName, data, range = 50) {
     Object.keys(players).forEach(id => {
@@ -142,11 +166,6 @@ async function initWorldItems() {
             worldItems[item.id] = item;
         });
         console.log(`Loaded ${items.length} world items from DB`);
-
-        // If no items exist, spawn initial weapons
-        if (items.length === 0) {
-            await spawnInitialWeapons();
-        }
     } catch (e) {
         console.error('Failed to load world items:', e);
     }
@@ -154,17 +173,20 @@ async function initWorldItems() {
 
 async function spawnInitialWeapons() {
     const types = ['MPSD', 'Sniper'];
-    for (let i = 0; i < 10; i++) {
+    const SPAWN_COUNT = 300; // Increased from 80
+    const WORLD_RANGE = 600; // -300 to +300
+
+    for (let i = 0; i < SPAWN_COUNT; i++) {
         const type = types[i % 2];
-        const x = (Math.random() - 0.5) * 100;
-        const z = (Math.random() - 0.5) * 100;
-        const y = perlinNoise(x, z, WORLD_SEED) * 15 + 0.5; // On terrain + 0.5
+        const x = (Math.random() - 0.5) * WORLD_RANGE;
+        const z = (Math.random() - 0.5) * WORLD_RANGE;
+        const y = perlinNoise(x, z, WORLD_SEED) * 15 + 1.0; // Lift up +1.0 to avoid ground clipping
         const id = `weapon_${Date.now()}_${i}`;
 
         await db.saveWorldItem(id, type, x, y, z);
         worldItems[id] = { id, type, x, y, z };
     }
-    console.log('Spawned 10 initial weapons');
+    console.log(`Spawned ${SPAWN_COUNT} initial weapons.`);
 }
 
 io.on('connection', (socket) => {
@@ -199,7 +221,7 @@ io.on('connection', (socket) => {
                     z: user.z || 0,
                     rotation: 0,
                     health: user.health > 0 ? user.health : 200, // Respawn if dead stored (200 HP max)
-                    inventory: user.inventory || []
+                    inventory: (user.inventory && user.inventory.length > 0) ? user.inventory : ['MPSD', 'Sniper']
                 };
 
                 socket.emit('loginSuccess', {

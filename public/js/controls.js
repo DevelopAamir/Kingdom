@@ -105,6 +105,10 @@ window.Controls = {
 
     // --- MOUSE HANDLERS ---
     onMouseMove: function (e) {
+        // Check if player is dead - disable look
+        const isDead = window.myPlayerMesh && window.myPlayerMesh.userData && window.myPlayerMesh.userData.isDead;
+        if (isDead) return;
+
         if (this.isLocked && this.yawObject && this.pitchObject) {
             this.yawObject.rotation.y -= e.movementX * 0.002;
             this.pitchObject.rotation.x -= e.movementY * 0.002;
