@@ -231,21 +231,32 @@ function initGame(playerData) {
     dirLight.shadow.bias = -0.0001;
     scene.add(dirLight);
 
-    const grassTexture = generateGrassTexture();
-    const floor = new THREE.Mesh(
-        new THREE.PlaneGeometry(400, 400),
-        new THREE.MeshStandardMaterial({ map: grassTexture, roughness: 0.9 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    floor.receiveShadow = true;
-    scene.add(floor);
+    // --- TERRAIN SYSTEM ---
+    // Initialize chunk-based procedural terrain (replaces flat floor)
+    if (window.TerrainSystem) {
+        window.TerrainSystem.init();
+        // Initial terrain load around spawn point
+        const spawnPos = new THREE.Vector3(playerData.x || 0, 0, playerData.z || 0);
+        window.TerrainSystem.update(spawnPos);
+        console.log('[Game] TerrainSystem initialized');
+    } else {
+        // Fallback: flat floor if terrain system not loaded
+        const grassTexture = generateGrassTexture();
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(400, 400),
+            new THREE.MeshStandardMaterial({ map: grassTexture, roughness: 0.9 })
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+    }
 
-    // Spawn Demo Guns
-    spawnWorldGun('MPSD', new THREE.Vector3(2, 0, 5));
-    spawnWorldGun('Sniper', new THREE.Vector3(-2, 0, 5));
-    spawnWorldGun('MPSD', new THREE.Vector3(5, 0, 0)); // Various spots
-    spawnWorldGun('Sniper', new THREE.Vector3(-5, 0, 10));
+    // Request world items from server (instead of hardcoded spawns)
+    setTimeout(() => {
+        if (Network.socket) {
+            Network.getWorldItems(playerData.x || 0, playerData.z || 0, 100);
+        }
+    }, 500); // Small delay to ensure socket is connected
 
     scene.add(yawObject); // Add camera control to scene
 
@@ -917,6 +928,11 @@ function animate() {
     // --- FIRING UPDATE ---
     FiringSystem.update(dt);
 
+    // --- TERRAIN UPDATE (Chunk Loading/Unloading) ---
+    if (window.TerrainSystem && myPlayerMesh) {
+        window.TerrainSystem.update(myPlayerMesh.position);
+    }
+
     const time = Date.now() * 0.001;
 
     // --- BLOOD PARTICLES ---
@@ -1104,7 +1120,7 @@ function animate() {
 
         // --- AUDIO: FOOTSTEPS ---
         const ud = myPlayerMesh.userData;
-        if (ud.stepTimer === undefined) ud.stepTimer = 0;
+        if (ud.stepTimer === undefined) ud.stepTimer = 0.3; // Start with small delay
 
         if (isMoving && ud.isGrounded) {
             ud.stepTimer -= dt;
@@ -1114,8 +1130,8 @@ function animate() {
                 ud.stepTimer = isSprintToggled ? 0.35 : 0.55;
             }
         } else {
-            // Reset timer so step plays immediately when starting to move
-            ud.stepTimer = 0;
+            // Small delay before first step when resuming movement (prevents spam)
+            if (ud.stepTimer < 0.15) ud.stepTimer = 0.15;
         }
 
         // --- ITEM PICKUP LOGIC ---
@@ -1124,7 +1140,11 @@ function animate() {
 
             // Float & Rotate
             item.rotation.y += dt;
-            item.position.y = 0.5 + Math.sin(time * 2 + item.userData.floatPhase) * 0.1;
+            // Use terrain height if available, else default
+            const baseY = window.TerrainSystem
+                ? window.TerrainSystem.getHeightAt(item.position.x, item.position.z)
+                : 0;
+            item.position.y = baseY + 0.5 + Math.sin(time * 2 + item.userData.floatPhase) * 0.1;
 
             // Distance Check
             const dist = myPlayerMesh.position.distanceTo(item.position);
@@ -1133,6 +1153,11 @@ function animate() {
                 if (!myPlayerMesh.userData.backGuns) myPlayerMesh.userData.backGuns = [];
 
                 if (myPlayerMesh.userData.backGuns.length < 2) {
+                    // Notify server first (will broadcast to nearby players)
+                    if (item.userData.itemId) {
+                        Network.pickupItem(item.userData.itemId);
+                    }
+
                     // Pickup
                     worldItems.splice(i, 1); // Remove from list
                     attachGunToBack(myPlayerMesh, item);
@@ -1161,6 +1186,15 @@ function animate() {
             const moveAngle = cameraYaw + angleOffset;
             myPlayerMesh.position.x -= Math.sin(moveAngle) * speed;
             myPlayerMesh.position.z -= Math.cos(moveAngle) * speed;
+
+            // Check tree collision and adjust position if needed
+            if (window.TerrainSystem && window.TerrainSystem.checkTreeCollision) {
+                const collision = window.TerrainSystem.checkTreeCollision(myPlayerMesh.position, myPlayerMesh.position);
+                if (collision) {
+                    myPlayerMesh.position.x = collision.x;
+                    myPlayerMesh.position.z = collision.z;
+                }
+            }
         }
 
         // --- JUMP & GRAVITY ---
@@ -1170,16 +1204,21 @@ function animate() {
         myPlayerMesh.userData.velocityY -= 0.015 * timeScale; // Gravity strength
         myPlayerMesh.position.y += myPlayerMesh.userData.velocityY * timeScale;
 
+        // Get terrain height at player position
+        const groundHeight = window.TerrainSystem
+            ? window.TerrainSystem.getHeightAt(myPlayerMesh.position.x, myPlayerMesh.position.z)
+            : 0;
+
         // Ground Collision
         let isGrounded = false;
-        if (myPlayerMesh.position.y <= 0) {
-            // Play Landing Sound if previously in air
-            if (!myPlayerMesh.userData.isGrounded && myPlayerMesh.userData.velocityY < 0) {
-                // Added velocity check to avoid spam on spawn/jitter
+        if (myPlayerMesh.position.y <= groundHeight) {
+            // Play Landing Sound only for significant falls (not walking downhill)
+            // -0.1 threshold = roughly 0.15m/frame fall at 60fps, filters out slope walking
+            if (!myPlayerMesh.userData.isGrounded && myPlayerMesh.userData.velocityY < -0.1) {
                 playSound(SFX_JUMP, VOL_JUMP);
             }
 
-            myPlayerMesh.position.y = 0;
+            myPlayerMesh.position.y = groundHeight;
             myPlayerMesh.userData.velocityY = 0;
             isGrounded = true;
         }

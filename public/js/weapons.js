@@ -436,9 +436,19 @@ window.GUN_ASSETS = {
 // I see GUN_URL constant in game.js: 
 // const GUN_URL = 'https://raw.githubusercontent.com/microsoft/MixedRealityToolkit/main/SpatialInput/Samples/DemoRoom/Media/Models/Gun.glb';
 
-window.spawnWorldGun = function (type, pos) {
+window.spawnWorldGun = function (type, pos, itemId = null) {
     const url = window.GUN_ASSETS[type] || window.GUN_ASSETS['MPSD'];
     if (!url) return;
+
+    // Check if item already spawned (prevent duplicates from server sync)
+    if (itemId && window.worldItems) {
+        for (const existing of window.worldItems) {
+            if (existing.userData && existing.userData.itemId === itemId) {
+                console.log(`[Weapons] Item ${itemId} already exists, skipping`);
+                return;
+            }
+        }
+    }
 
     // Use global loader if available, else new
     const loader = window.loader || new THREE.GLTFLoader();
@@ -449,7 +459,8 @@ window.spawnWorldGun = function (type, pos) {
         mesh.scale.set(1.5, 1.5, 1.5);
 
         mesh.position.copy(pos);
-        mesh.position.y = 0.5; // Float
+        // Keep Y from pos if provided (terrain-aware), else default float
+        if (pos.y === undefined || pos.y === 0) mesh.position.y = 0.5;
 
         // Add to scene
         scene.add(mesh);
@@ -457,8 +468,10 @@ window.spawnWorldGun = function (type, pos) {
         // Track
         mesh.userData.isPickup = true;
         mesh.userData.pickupType = type;
+        mesh.userData.itemId = itemId; // Server-assigned ID for sync
         mesh.userData.floatPhase = Math.random() * Math.PI * 2;
 
         if (window.worldItems) window.worldItems.push(mesh);
+        console.log(`[Weapons] Spawned ${type} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}) id=${itemId}`);
     });
 };

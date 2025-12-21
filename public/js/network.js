@@ -5,6 +5,7 @@ window.Network = {
 
     init: function () {
         this.socket = io();
+        window.socket = this.socket; // Expose globally for terrain.js
 
         // --- AUTHENTICATION LISTENERS ---
         this.socket.on('authError', (data) => {
@@ -285,6 +286,39 @@ window.Network = {
             }
         });
 
+        // --- TERRAIN & WORLD ITEMS LISTENERS ---
+        this.socket.on('chunkData', (data) => {
+            if (window.TerrainSystem && window.TerrainSystem.onChunkData) {
+                window.TerrainSystem.onChunkData(data);
+            }
+        });
+
+        this.socket.on('worldItems', (items) => {
+            // Spawn world items received from server
+            if (items && Array.isArray(items)) {
+                items.forEach(item => {
+                    if (window.spawnWorldGun) {
+                        window.spawnWorldGun(item.type, new THREE.Vector3(item.x, item.y, item.z), item.id);
+                    }
+                });
+            }
+        });
+
+        this.socket.on('itemRemoved', (data) => {
+            // Remove item picked up by another player
+            const id = data.id;
+            if (window.worldItems) {
+                for (let i = window.worldItems.length - 1; i >= 0; i--) {
+                    if (window.worldItems[i].userData && window.worldItems[i].userData.itemId === id) {
+                        if (scene) scene.remove(window.worldItems[i]);
+                        window.worldItems.splice(i, 1);
+                        console.log(`[Network] Item removed by other player: ${id}`);
+                        break;
+                    }
+                }
+            }
+        });
+
         console.log("Network Initialized.");
     },
 
@@ -312,5 +346,19 @@ window.Network = {
 
     sendInventory: function (inventory) {
         this.socket.emit('updateInventory', inventory);
+    },
+
+    // --- TERRAIN & ITEMS ---
+    requestChunks: function (chunks) {
+        // chunks: array of { cx, cz }
+        this.socket.emit('requestChunks', chunks);
+    },
+
+    getWorldItems: function (x, z, radius) {
+        this.socket.emit('getWorldItems', { x, z, radius });
+    },
+
+    pickupItem: function (itemId) {
+        this.socket.emit('pickupItem', { itemId });
     }
 };

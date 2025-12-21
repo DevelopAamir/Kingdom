@@ -11,6 +11,162 @@ app.use(express.json()); // Enable JSON body parsing
 // players[socket.id] = { username, health, x, y, z, rotation, inventory, ... }
 let players = {};
 
+// In-memory world items cache (synced with DB)
+let worldItems = {};
+
+// --- TERRAIN GENERATION ---
+const CHUNK_SIZE = 50;
+const WORLD_SEED = 12345;
+
+// Simple noise function for terrain generation
+function seededRandom(seed) {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+}
+
+function noise2D(x, z, seed) {
+    const n = Math.sin(x * 12.9898 + z * 78.233 + seed) * 43758.5453;
+    return n - Math.floor(n);
+}
+
+function smoothNoise(x, z, seed) {
+    const corners = (noise2D(x - 1, z - 1, seed) + noise2D(x + 1, z - 1, seed) +
+        noise2D(x - 1, z + 1, seed) + noise2D(x + 1, z + 1, seed)) / 16;
+    const sides = (noise2D(x - 1, z, seed) + noise2D(x + 1, z, seed) +
+        noise2D(x, z - 1, seed) + noise2D(x, z + 1, seed)) / 8;
+    const center = noise2D(x, z, seed) / 4;
+    return corners + sides + center;
+}
+
+function interpolatedNoise(x, z, seed) {
+    const intX = Math.floor(x);
+    const fracX = x - intX;
+    const intZ = Math.floor(z);
+    const fracZ = z - intZ;
+
+    const v1 = smoothNoise(intX, intZ, seed);
+    const v2 = smoothNoise(intX + 1, intZ, seed);
+    const v3 = smoothNoise(intX, intZ + 1, seed);
+    const v4 = smoothNoise(intX + 1, intZ + 1, seed);
+
+    const i1 = v1 * (1 - fracX) + v2 * fracX;
+    const i2 = v3 * (1 - fracX) + v4 * fracX;
+
+    return i1 * (1 - fracZ) + i2 * fracZ;
+}
+
+function perlinNoise(x, z, seed, octaves = 4) {
+    let total = 0;
+    let frequency = 0.05;
+    let amplitude = 1;
+    let maxValue = 0;
+
+    for (let i = 0; i < octaves; i++) {
+        total += interpolatedNoise(x * frequency, z * frequency, seed) * amplitude;
+        maxValue += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2;
+    }
+
+    return total / maxValue;
+}
+
+// Generate chunk data
+function generateChunk(cx, cz) {
+    const resolution = 10; // 10x10 height samples per chunk
+    const heightmap = [];
+    const trees = [];
+
+    const worldX = cx * CHUNK_SIZE;
+    const worldZ = cz * CHUNK_SIZE;
+
+    // Generate heightmap
+    for (let i = 0; i <= resolution; i++) {
+        heightmap[i] = [];
+        for (let j = 0; j <= resolution; j++) {
+            const wx = worldX + (i / resolution) * CHUNK_SIZE;
+            const wz = worldZ + (j / resolution) * CHUNK_SIZE;
+
+            // Multi-octave noise for mountains
+            const height = perlinNoise(wx, wz, WORLD_SEED) * 15; // Max 15 units height
+            heightmap[i][j] = height;
+        }
+    }
+
+    // Generate trees (random positions within chunk)
+    const treeCount = Math.floor(seededRandom(cx * 1000 + cz + WORLD_SEED) * 5) + 2; // 2-7 trees per chunk
+    const treeTypes = ['Pine Tree', 'Pine Tree', 'Pine Tree', 'Pine Tree', 'Pine Tree',
+        'Pine Tree', 'Pine Tree', 'Tree', 'Tree', 'Tree2'];
+
+    for (let i = 0; i < treeCount; i++) {
+        const tx = worldX + seededRandom(cx * 100 + cz * 10 + i + WORLD_SEED) * CHUNK_SIZE;
+        const tz = worldZ + seededRandom(cz * 100 + cx * 10 + i + WORLD_SEED * 2) * CHUNK_SIZE;
+
+        // Get height at tree position
+        const hi = Math.floor(((tx - worldX) / CHUNK_SIZE) * resolution);
+        const hj = Math.floor(((tz - worldZ) / CHUNK_SIZE) * resolution);
+        const ty = heightmap[Math.min(hi, resolution)][Math.min(hj, resolution)] || 0;
+
+        const typeIndex = Math.floor(seededRandom(tx + tz + WORLD_SEED) * treeTypes.length);
+
+        trees.push({
+            type: treeTypes[typeIndex],
+            x: tx,
+            y: ty,
+            z: tz,
+            scale: 3 + seededRandom(tx * tz + WORLD_SEED) * 2 // 3-5 scale (larger trees)
+        });
+    }
+
+    return { cx, cz, heightmap, trees };
+}
+
+// Notify players within range of an event
+function notifyNearby(eventX, eventZ, eventName, data, range = 50) {
+    Object.keys(players).forEach(id => {
+        const p = players[id];
+        const dx = p.x - eventX;
+        const dz = p.z - eventZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist <= range) {
+            io.to(id).emit(eventName, data);
+        }
+    });
+}
+
+// Initialize world items from DB
+async function initWorldItems() {
+    try {
+        const items = await db.getAllWorldItems();
+        items.forEach(item => {
+            worldItems[item.id] = item;
+        });
+        console.log(`Loaded ${items.length} world items from DB`);
+
+        // If no items exist, spawn initial weapons
+        if (items.length === 0) {
+            await spawnInitialWeapons();
+        }
+    } catch (e) {
+        console.error('Failed to load world items:', e);
+    }
+}
+
+async function spawnInitialWeapons() {
+    const types = ['MPSD', 'Sniper'];
+    for (let i = 0; i < 10; i++) {
+        const type = types[i % 2];
+        const x = (Math.random() - 0.5) * 100;
+        const z = (Math.random() - 0.5) * 100;
+        const y = perlinNoise(x, z, WORLD_SEED) * 15 + 0.5; // On terrain + 0.5
+        const id = `weapon_${Date.now()}_${i}`;
+
+        await db.saveWorldItem(id, type, x, y, z);
+        worldItems[id] = { id, type, x, y, z };
+    }
+    console.log('Spawned 10 initial weapons');
+}
+
 io.on('connection', (socket) => {
     console.log('New connection:', socket.id);
 
@@ -60,6 +216,43 @@ io.on('connection', (socket) => {
         } catch (err) {
             console.error(err);
             socket.emit('authError', { message: "Server error." });
+        }
+    });
+
+    // --- TERRAIN CHUNKS ---
+    socket.on('requestChunks', async (chunks) => {
+        for (const { cx, cz } of chunks) {
+            let chunkData = await db.getChunk(cx, cz);
+            if (!chunkData) {
+                // Generate and save new chunk
+                chunkData = generateChunk(cx, cz);
+                await db.saveChunk(cx, cz, chunkData);
+            }
+            socket.emit('chunkData', chunkData);
+        }
+    });
+
+    // --- WORLD ITEMS ---
+    socket.on('getWorldItems', async (data) => {
+        // Return items within range of player position
+        const { x, z, radius } = data;
+        const items = await db.getItemsInRange(x, z, radius || 100);
+        socket.emit('worldItems', items);
+    });
+
+    socket.on('pickupItem', async (data) => {
+        const { itemId } = data;
+        const item = worldItems[itemId];
+
+        if (item) {
+            // Remove from DB and memory
+            await db.removeWorldItem(itemId);
+            delete worldItems[itemId];
+
+            // Notify nearby players only (50m range)
+            notifyNearby(item.x, item.z, 'itemRemoved', { id: itemId }, 50);
+
+            console.log(`Item ${itemId} picked up by ${socket.id}`);
         }
     });
 
@@ -178,7 +371,27 @@ app.get('/api/calibration/:type', async (req, res) => {
     }
 });
 
-http.listen(3000, '0.0.0.0', () => {
-    console.log('Battlefield server running on *:3000');
-    console.log('Access via LAN: http://192.168.1.145:3000 (or your machine IP)');
+// Chunk API (HTTP fallback)
+app.get('/api/chunk/:cx/:cz', async (req, res) => {
+    try {
+        const cx = parseInt(req.params.cx);
+        const cz = parseInt(req.params.cz);
+        let chunkData = await db.getChunk(cx, cz);
+        if (!chunkData) {
+            chunkData = generateChunk(cx, cz);
+            await db.saveChunk(cx, cz, chunkData);
+        }
+        res.json(chunkData);
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Initialize and start server
+initWorldItems().then(() => {
+    http.listen(3000, '0.0.0.0', () => {
+        console.log('Battlefield server running on *:3000');
+        console.log('Access via LAN: http://192.168.1.145:3000 (or your machine IP)');
+    });
 });

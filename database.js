@@ -20,6 +20,21 @@ db.serialize(() => {
         type TEXT UNIQUE,
         data TEXT
     )`);
+    // Terrain chunks: stores heightmap & trees per chunk
+    db.run(`CREATE TABLE IF NOT EXISTS terrain_chunks (
+        cx INTEGER,
+        cz INTEGER,
+        data TEXT,
+        PRIMARY KEY (cx, cz)
+    )`);
+    // World items: weapons on ground
+    db.run(`CREATE TABLE IF NOT EXISTS world_items (
+        id TEXT PRIMARY KEY,
+        type TEXT,
+        x REAL,
+        y REAL,
+        z REAL
+    )`);
 });
 
 const Database = {
@@ -85,6 +100,72 @@ const Database = {
                 } catch (e) {
                     resolve(null);
                 }
+            });
+        });
+    },
+
+    // --- TERRAIN CHUNKS ---
+    getChunk: (cx, cz) => {
+        return new Promise((resolve, reject) => {
+            db.get(`SELECT data FROM terrain_chunks WHERE cx = ? AND cz = ?`, [cx, cz], (err, row) => {
+                if (err) return reject(err);
+                if (!row) return resolve(null);
+                try {
+                    resolve(JSON.parse(row.data));
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        });
+    },
+
+    saveChunk: (cx, cz, data) => {
+        return new Promise((resolve, reject) => {
+            const str = JSON.stringify(data);
+            db.run(`INSERT OR REPLACE INTO terrain_chunks (cx, cz, data) VALUES (?, ?, ?)`, [cx, cz, str], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    // --- WORLD ITEMS ---
+    getAllWorldItems: () => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT * FROM world_items`, [], (err, rows) => {
+                if (err) return reject(err);
+                resolve(rows || []);
+            });
+        });
+    },
+
+    getItemsInRange: (x, z, radius) => {
+        return new Promise((resolve, reject) => {
+            // SQLite doesn't have sqrt, so we use square distance
+            const r2 = radius * radius;
+            db.all(`SELECT * FROM world_items WHERE ((x - ?) * (x - ?) + (z - ?) * (z - ?)) <= ?`,
+                [x, x, z, z, r2], (err, rows) => {
+                    if (err) return reject(err);
+                    resolve(rows || []);
+                });
+        });
+    },
+
+    saveWorldItem: (id, type, x, y, z) => {
+        return new Promise((resolve, reject) => {
+            db.run(`INSERT OR REPLACE INTO world_items (id, type, x, y, z) VALUES (?, ?, ?, ?, ?)`,
+                [id, type, x, y, z], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+    },
+
+    removeWorldItem: (id) => {
+        return new Promise((resolve, reject) => {
+            db.run(`DELETE FROM world_items WHERE id = ?`, [id], (err) => {
+                if (err) reject(err);
+                else resolve();
             });
         });
     }
