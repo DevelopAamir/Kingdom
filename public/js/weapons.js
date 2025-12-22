@@ -17,12 +17,12 @@ window.BONE_MAPPINGS = {
 window.CALIBRATION = {
     // Pose when holding a gun (Applied to bones)
     HOLDING_POSE: {
-        rightArm: { x: -1.033, y: -0.338, z: -0.164 },
+        rightArm: { x: -1, y: -0.34, z: 0.032 },
         rightForeArm: { x: -1.728, y: -2.134, z: 0 },
-        rightHand: { x: -0.048, y: -0.106, z: -1.265 },
-        leftArm: { x: -1.356, y: -0.161, z: 0.921 },
+        rightHand: { x: 0.424, y: 1.061, z: -0.164 },
+        leftArm: { x: -1.045, y: -0.164, z: 1.012 },
         leftForeArm: { x: -0.957, y: 0, z: 0 },
-        leftHand: { x: -0.275, y: -0.445, z: 0.295 }
+        leftHand: { x: -0.555, y: -1.29, z: -0.555 }
     },
     // Gun Transform on Back (Spine parent) -> Recovered from attachGunToBack
     BACK_TRANSFORM: {
