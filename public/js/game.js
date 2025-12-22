@@ -1221,7 +1221,7 @@ function animate() {
             }
         }
 
-        // --- JUMP & GRAVITY ---
+        // --- JUMP & GRAVITY (fixed: no clipping through ground) ---
         if (myPlayerMesh.userData.velocityY === undefined) myPlayerMesh.userData.velocityY = 0;
 
         // Get terrain height at player position
@@ -1229,32 +1229,49 @@ function animate() {
             ? window.TerrainSystem.getHeightAt(myPlayerMesh.position.x, myPlayerMesh.position.z)
             : 0;
 
-        // If grounded and moving, snap to terrain (prevents downhill falling/landing flicker)
-        if (myPlayerMesh.userData.isGrounded && isMoving) {
-            myPlayerMesh.position.y = groundHeight;
-            myPlayerMesh.userData.velocityY = 0;
-        } else {
-            // Apply gravity when in air or standing still
-            myPlayerMesh.userData.velocityY -= 0.015 * timeScale; // Gravity strength
-            myPlayerMesh.position.y += myPlayerMesh.userData.velocityY * timeScale;
-        }
-
-        // Ground Collision
+        const heightDiff = myPlayerMesh.position.y - groundHeight;
         let isGrounded = false;
-        if (myPlayerMesh.position.y <= groundHeight) {
-            // Play Landing Sound only for significant falls (not walking downhill)
-            if (!myPlayerMesh.userData.isGrounded && myPlayerMesh.userData.velocityY < -0.1) {
-                playSound(SFX_JUMP, VOL_JUMP);
-            }
 
+        // Only snap UP if below ground AND not currently jumping (velocityY > 0 means jumping)
+        if (myPlayerMesh.position.y < groundHeight && myPlayerMesh.userData.velocityY <= 0) {
             myPlayerMesh.position.y = groundHeight;
             myPlayerMesh.userData.velocityY = 0;
             isGrounded = true;
         }
+        // If on or slightly above ground and not jumping up
+        else if (heightDiff <= 0.2 && myPlayerMesh.userData.velocityY <= 0) {
+            // Smoothly follow terrain going downhill (lerp)
+            const lerpSpeed = 0.4 * timeScale;
+            myPlayerMesh.position.y = myPlayerMesh.position.y + (groundHeight - myPlayerMesh.position.y) * lerpSpeed;
+
+            // Clamp to ground if very close
+            if (Math.abs(myPlayerMesh.position.y - groundHeight) < 0.02) {
+                myPlayerMesh.position.y = groundHeight;
+            }
+            myPlayerMesh.userData.velocityY = 0;
+            isGrounded = true;
+        }
+        // In the air - apply gravity
+        else {
+            myPlayerMesh.userData.velocityY -= 0.015 * timeScale;
+            myPlayerMesh.position.y += myPlayerMesh.userData.velocityY * timeScale;
+
+            // Catch ground collision
+            if (myPlayerMesh.position.y <= groundHeight) {
+                myPlayerMesh.position.y = groundHeight;
+                myPlayerMesh.userData.velocityY = 0;
+                isGrounded = true;
+
+                // Landing sound
+                if (!myPlayerMesh.userData.isGrounded && myPlayerMesh.userData.velocityY < -0.1) {
+                    playSound(SFX_JUMP, VOL_JUMP);
+                }
+            }
+        }
 
         // Jump Input
         if (jumpInput && isGrounded) {
-            myPlayerMesh.userData.velocityY = 0.22; // Initial Jump Velocity (per 16ms unit)
+            myPlayerMesh.userData.velocityY = 0.22;
             isGrounded = false;
         }
 
