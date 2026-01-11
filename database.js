@@ -12,8 +12,12 @@ db.serialize(() => {
         inventory TEXT DEFAULT '[]',
         health INTEGER DEFAULT 200,
         x REAL DEFAULT 0,
-        y REAL DEFAULT 1,
-        z REAL DEFAULT 0
+        y REAL DEFAULT 40.0,
+        z REAL DEFAULT 0,
+        rotation REAL DEFAULT 0,
+        kills INTEGER DEFAULT 0,
+        deaths INTEGER DEFAULT 0,
+        model TEXT DEFAULT 'Ninja'
     )`);
     db.run(`CREATE TABLE IF NOT EXISTS calibration (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +46,8 @@ const Database = {
         return new Promise(async (resolve, reject) => {
             try {
                 const hash = await bcrypt.hash(password, 10);
-                db.run(`INSERT INTO users (username, password) VALUES (?, ?)`, [username, hash], function (err) {
+                // Spawn well above terrain (Y=40) then fall to ground naturally
+                db.run(`INSERT INTO users (username, password, y) VALUES (?, ?, 40.0)`, [username, hash], function (err) {
                     if (err) return reject(err);
                     resolve({ id: this.lastID, username, health: 200, inventory: [] });
                 });
@@ -60,7 +65,7 @@ const Database = {
 
                 const match = await bcrypt.compare(password, row.password);
                 if (match) {
-                    // Parse inventory from JSON string
+                    // Parse JSON fields
                     try { row.inventory = JSON.parse(row.inventory); } catch (e) { row.inventory = []; }
                     resolve(row);
                 } else {
@@ -71,12 +76,20 @@ const Database = {
     },
 
     savePlayerState: (username, data) => {
-        // data: { health, inventory, x, y, z }
-        // We only save major state changes or on disconnect to avoid spamming DB
-        const invStr = JSON.stringify(data.inventory || []);
-        db.run(`UPDATE users SET health = ?, inventory = ?, x = ?, y = ?, z = ? WHERE username = ?`,
-            [data.health, invStr, data.x, data.y, data.z, username], (err) => {
+        // data: PlayerState.toDBObject() result
+        // Saves full player state on disconnect
+        const invStr = typeof data.inventory === 'string' ? data.inventory : JSON.stringify(data.inventory || []);
+
+        db.run(`UPDATE users SET 
+            health = ?, inventory = ?, x = ?, y = ?, z = ?, 
+            rotation = ?, kills = ?, deaths = ?, model = ? 
+            WHERE username = ?`,
+            [
+                data.health, invStr, data.x, data.y, data.z,
+                data.rotation, data.kills, data.deaths, data.model, username
+            ], (err) => {
                 if (err) console.error("Save Error:", err);
+                else console.log(`[DB] Saved state for ${username}`);
             });
     },
 
