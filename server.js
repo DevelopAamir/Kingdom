@@ -3,7 +3,7 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 const db = require('./database');
-const { PlayerState, players, getPlayer, getAllPlayers, getPlayersObject, addPlayer, removePlayer, getNearbyPlayers } = require('./playerState');
+const { PlayerState, players, getPlayer, getAllPlayers, getPlayersObject, addPlayer, removePlayer, getPlayerByUsername, markPlayerOffline, getNearbyPlayers } = require('./playerState');
 
 app.use(express.static('public'));
 app.use(express.json()); // Enable JSON body parsing
@@ -443,36 +443,60 @@ io.on('connection', (socket) => {
         try {
             const user = await db.authenticateUser(data.username, data.password);
             if (user) {
-                // Calculate correct spawn Y based on terrain at player's (x, z) position
-                let terrainY = 20; // Default safe spawn height
-                try {
-                    terrainY = await getTerrainHeightAt(user.x, user.z);
-                    console.log(`[Server] ${user.username} terrain Y at (${user.x}, ${user.z}): ${terrainY}`);
+                // Check if this player already exists in world (offline)
+                const existingPlayer = getPlayerByUsername(user.username);
+                let playerState;
 
-                    // Validate terrain Y is a number
-                    if (isNaN(terrainY) || terrainY === null || terrainY === undefined) {
-                        console.error(`[Server] Invalid terrain Y for ${user.username}, using fallback`);
-                        terrainY = 20;
+                if (existingPlayer && !existingPlayer.isOnline) {
+                    // Player is reconnecting - restore their offline character
+                    console.log(`[Server] ${user.username} reconnecting - restoring offline character`);
+
+                    // Remove the offline entry
+                    players.delete(existingPlayer.socketId);
+
+                    // Update socket ID and bring online
+                    existingPlayer.setOnline(socket.id);
+                    players.set(socket.id, existingPlayer);
+                    playerState = existingPlayer;
+
+                    // Update model if they changed it
+                    if (data.model) {
+                        playerState.model = data.model;
                     }
-                } catch (err) {
-                    console.error(`[Server] Error calculating terrain for ${user.username}:`, err);
-                    terrainY = 20; // Use safe fallback
-                }
+                } else {
+                    // New login or player was fully removed - create fresh
 
-                // Create PlayerState from DB data
-                const playerState = addPlayer(socket.id, user.username, {
-                    x: user.x,
-                    y: terrainY, // Use terrain-aware Y instead of database Y
-                    z: user.z,
-                    rotation: user.rotation,
-                    health: user.health > 0 ? user.health : 200,
-                    kills: user.kills || 0,
-                    deaths: user.deaths || 0,
-                    weapons: user.weapons,
-                    inventory: user.inventory,
-                    equippedSlot: user.equippedSlot ?? -1,
-                    model: data.model || user.model || 'Ninja'
-                });
+                    // Calculate correct spawn Y based on terrain at player's (x, z) position
+                    let terrainY = 20; // Default safe spawn height
+                    try {
+                        terrainY = await getTerrainHeightAt(user.x, user.z);
+                        console.log(`[Server] ${user.username} terrain Y at (${user.x}, ${user.z}): ${terrainY}`);
+
+                        // Validate terrain Y is a number
+                        if (isNaN(terrainY) || terrainY === null || terrainY === undefined) {
+                            console.error(`[Server] Invalid terrain Y for ${user.username}, using fallback`);
+                            terrainY = 20;
+                        }
+                    } catch (err) {
+                        console.error(`[Server] Error calculating terrain for ${user.username}:`, err);
+                        terrainY = 20; // Use safe fallback
+                    }
+
+                    // Create PlayerState from DB data
+                    playerState = addPlayer(socket.id, user.username, {
+                        x: user.x,
+                        y: terrainY, // Use terrain-aware Y instead of database Y
+                        z: user.z,
+                        rotation: user.rotation,
+                        health: user.health > 0 ? user.health : 200,
+                        kills: user.kills || 0,
+                        deaths: user.deaths || 0,
+                        weapons: user.weapons,
+                        inventory: user.inventory,
+                        equippedSlot: user.equippedSlot ?? -1,
+                        model: data.model || user.model || 'Ninja'
+                    });
+                }
 
                 // Send full state to the logging-in player
                 socket.emit('loginSuccess', {
@@ -483,13 +507,13 @@ io.on('connection', (socket) => {
                 // Send existing players to new player (network packets for other players)
                 socket.emit('currentPlayers', getPlayersObject());
 
-                // Notify others about new player
-                socket.broadcast.emit('newPlayer', {
+                // Notify others about player coming online (or being new)
+                socket.broadcast.emit('playerCameOnline', {
                     id: socket.id,
                     player: playerState.toNetworkPacket()
                 });
 
-                console.log(`[Server] ${user.username} logged in. Total players: ${players.size}`);
+                console.log(`[Server] ${user.username} logged in. Total players in world: ${players.size}`);
             } else {
                 socket.emit('authError', { message: "Invalid credentials." });
             }
@@ -655,15 +679,19 @@ io.on('connection', (socket) => {
 
 
     socket.on('disconnect', () => {
-        const playerState = removePlayer(socket.id);
+        const playerState = markPlayerOffline(socket.id);
         if (playerState) {
-            console.log(`[Server] ${playerState.username} disconnected. Saving state...`);
+            console.log(`[Server] ${playerState.username} went offline. They remain in world as idle.`);
 
             // Save full state to DB
             db.savePlayerState(playerState.username, playerState.toDBObject());
 
-            io.emit('playerDisconnected', socket.id);
-            console.log(`[Server] Total players: ${players.size}`);
+            // Notify clients that player went offline (but NOT removed - they stay visible)
+            io.emit('playerWentOffline', {
+                id: playerState.socketId,
+                username: playerState.username
+            });
+            console.log(`[Server] Total players in world: ${players.size} (including offline)`);
         }
     });
 });
@@ -687,6 +715,16 @@ app.get('/api/calibration/:type', async (req, res) => {
         console.error(e);
         res.status(500).json({ error: e.message });
     }
+});
+
+// Loading screen configuration - can be updated via dashboard later
+app.get('/api/loading-screen', (req, res) => {
+    res.json({
+        imageUrl: '/loading_screen.png',
+        title: 'XANDOR',
+        subtitle: 'Loading world...',
+        version: '1.0.0'
+    });
 });
 
 // Chunk API (HTTP fallback)

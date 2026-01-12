@@ -34,6 +34,9 @@ class PlayerState {
         this.model = dbData.model || 'Ninja';
         this.lastUpdate = Date.now();
         this.isAlive = true;
+
+        // Online status - for persistent world
+        this.isOnline = true;
     }
 
     // Helper to parse JSON safely
@@ -94,6 +97,23 @@ class PlayerState {
         // Keep weapons and inventory on respawn (can be changed if desired)
     }
 
+    // Mark player as offline (for persistent world)
+    setOffline() {
+        this.isOnline = false;
+        this.moveSpeed = 0;
+        this.moveDirX = 0;
+        this.moveDirY = 0;
+        this.animationState = 'idle'; // Stand still when offline
+        this.lastUpdate = Date.now();
+    }
+
+    // Mark player as online (when they reconnect)
+    setOnline(newSocketId) {
+        this.socketId = newSocketId;
+        this.isOnline = true;
+        this.lastUpdate = Date.now();
+    }
+
 
 
     // Convert to DB-safe object for persistence
@@ -127,6 +147,7 @@ class PlayerState {
             moveDirY: this.moveDirY,
             model: this.model,
             animationState: this.animationState,
+            isOnline: this.isOnline,
             inventory: []
         };
     }
@@ -177,6 +198,31 @@ function removePlayer(socketId) {
     return state; // Return for saving to DB
 }
 
+// Find player by username (for reconnection)
+function getPlayerByUsername(username) {
+    for (const [id, state] of players) {
+        if (state.username === username) {
+            return state;
+        }
+    }
+    return null;
+}
+
+// Mark player as offline but keep in world (persistent world feature)
+function markPlayerOffline(socketId) {
+    const state = players.get(socketId);
+    if (state) {
+        state.setOffline();
+        // Generate a new offline ID to differentiate from active socket
+        const offlineId = 'offline_' + state.username;
+        players.delete(socketId);
+        players.set(offlineId, state);
+        state.socketId = offlineId;
+        return state;
+    }
+    return null;
+}
+
 function getNearbyPlayers(x, z, radius) {
     const nearby = [];
     const radiusSq = radius * radius;
@@ -200,5 +246,7 @@ module.exports = {
     getPlayersObject,
     addPlayer,
     removePlayer,
+    getPlayerByUsername,
+    markPlayerOffline,
     getNearbyPlayers
 };
