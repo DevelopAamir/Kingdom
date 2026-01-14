@@ -18,40 +18,40 @@ const WORLD_SEED = 98765; // Changed seed to force new generation logic
 // Biome configuration
 const BIOMES = {
     plain: {
-        heightMultiplier: 6,       // Flat terrain with some variation
-        baseHeight: 0.5,           // Lowered to allow water lakes (WATER_LEVEL is 4.0)
+        heightMultiplier: 10,       // Increased variation
+        baseHeight: 6.0,           // Starts ABOVE sand level (green grass)
         treeDensity: 0.4,
         treeTypes: ['Tree', 'Tree2'],
         rockDensity: 0,
         color: 'light_green'
     },
     forest: {
-        heightMultiplier: 8,       // Gentle rolling hills
-        baseHeight: 2.0,           // Lowered to allow some lakes in forest
+        heightMultiplier: 15,       // More rolling hills
+        baseHeight: 8.0,           // Distinctly higher than plains
         treeDensity: 1.5,          // Dense trees
         treeTypes: ['Pine Tree', 'Tree', 'Tree2', 'Big Tree'],
         rockDensity: 0.1,
         color: 'dark_green'
     },
     hill: {
-        heightMultiplier: 18,      // Moderate hills
-        baseHeight: 10,
+        heightMultiplier: 30,      // Much taller hills
+        baseHeight: 15,
         treeDensity: 0.6,
         treeTypes: ['Pine Tree', 'Tree'],
         rockDensity: 0.3,
         color: 'yellow_green'
     },
     mountain: {
-        heightMultiplier: 35,      // Mountains with gradual slopes
-        baseHeight: 20,
+        heightMultiplier: 80,      // Epic peaks
+        baseHeight: 25,
         treeDensity: 0.15,
         treeTypes: ['Pine Tree'],
         rockDensity: 1.2,
         color: 'gray'
     },
     beach: {
-        heightMultiplier: 5,       // Flat near water
-        baseHeight: 0,             // Can go underwater
+        heightMultiplier: 8,       // Some variation in the seabed
+        baseHeight: -10,           // DEEP water (oceans)
         treeDensity: 0,            // No trees on beach
         treeTypes: [],
         rockDensity: 0.1,
@@ -160,7 +160,7 @@ function getBiomeHeight(wx, wz, biome) {
 // Water fills low areas - simple and seamless
 
 const WATER_LEVEL = 4.0; // Global water level - areas below this are underwater
-const BEACH_HEIGHT = 6.0; // Sand appears between water level and this height
+const BEACH_HEIGHT = 5.5; // Sand appears between water level and this height (Narrower band)
 
 /**
  * Check if a position should have water (lake/ocean)
