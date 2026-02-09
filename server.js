@@ -11,377 +11,403 @@ app.use(express.json()); // Enable JSON body parsing
 // In-memory world items cache (synced with DB)
 let worldItems = {};
 
-// --- TERRAIN GENERATION ---
-const CHUNK_SIZE = 50;
-const WORLD_SEED = 98765; // Changed seed to force new generation logic
+// --- REALISTIC MINECRAFT-LIKE TERRAIN GENERATION (OPTIMIZED) ---
+const FastNoise = require('./fast_noise');
 
-// Biome configuration
-const BIOMES = {
-    plain: {
-        heightMultiplier: 10,       // Increased variation
-        baseHeight: 6.0,           // Starts ABOVE sand level (green grass)
-        treeDensity: 0.4,
-        treeTypes: ['Tree', 'Tree2'],
-        rockDensity: 0,
-        color: 'light_green'
-    },
-    forest: {
-        heightMultiplier: 15,       // More rolling hills
-        baseHeight: 8.0,           // Distinctly higher than plains
-        treeDensity: 1.5,          // Dense trees
-        treeTypes: ['Pine Tree', 'Tree', 'Tree2', 'Big Tree'],
-        rockDensity: 0.1,
-        color: 'dark_green'
-    },
-    hill: {
-        heightMultiplier: 30,      // Much taller hills
-        baseHeight: 15,
-        treeDensity: 0.6,
-        treeTypes: ['Pine Tree', 'Tree'],
-        rockDensity: 0.3,
-        color: 'yellow_green'
-    },
-    mountain: {
-        heightMultiplier: 80,      // Epic peaks
-        baseHeight: 25,
-        treeDensity: 0.15,
-        treeTypes: ['Pine Tree'],
-        rockDensity: 1.2,
-        color: 'gray'
-    },
-    beach: {
-        heightMultiplier: 8,       // Some variation in the seabed
-        baseHeight: -10,           // DEEP water (oceans)
-        treeDensity: 0,            // No trees on beach
-        treeTypes: [],
-        rockDensity: 0.1,
-        color: 'sand'
+// Initialize noise with world seed
+const WORLD_SEED_NUM = 98765;
+FastNoise.seed(WORLD_SEED_NUM);
+
+const CHUNK_SIZE = 50;
+const RESOLUTION = 50; // 51x51 vertices per chunk
+
+// World Config
+const OCEAN_DEPTH = -15;
+const WATER_LEVEL = 4.0;
+const BEACH_HEIGHT = 5.5;
+
+// ============== SPLINE HELPERS ==============
+
+// Simple linear interpolation
+function remap(value, fromLow, fromHigh, toLow, toHigh) {
+    const t = (value - fromLow) / (fromHigh - fromLow);
+    // Clamp t between 0 and 1
+    const clampedT = Math.max(0, Math.min(1, t));
+    return toLow + clampedT * (toHigh - toLow);
+}
+
+// Spline point structure: [noiseValue, heightValue]
+// Interpolates between points
+function spline(noiseVal, points) {
+    for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i];
+        const p2 = points[i + 1];
+
+        if (noiseVal >= p1[0] && noiseVal <= p2[0]) {
+            return remap(noiseVal, p1[0], p2[0], p1[1], p2[1]);
+        }
     }
+    // Out of bounds - clamp to edges
+    if (noiseVal < points[0][0]) return points[0][1];
+    if (noiseVal > points[points.length - 1][0]) return points[points.length - 1][1];
+
+    return 0;
+}
+
+// ============== NEW NOISE FUNCTIONS ==============
+
+/**
+ * Continentalness: Determines "Inland-ness"
+ * -1.0 = Deep Ocean
+ * -0.2 = Coast/Beach
+ *  0.0 = Flat Lands
+ *  0.5 = Inland / Highlands
+ *  1.0 = Far Inland
+ */
+function getContinentalness(x, z) {
+    // Very low frequency noise (large continents)
+    return FastNoise.fractal(x * 0.001, z * 0.001, 2);
+}
+
+/**
+ * Erosion: Determines Flatness vs Ruggedness
+ * -1.0 = Very Mountainous / Canyon
+ *  1.0 = Very Flat
+ */
+function getErosion(x, z) {
+    // Medium frequency
+    return FastNoise.fractal(x * 0.003, z * 0.003, 2);
+}
+
+/**
+ * Peaks & Valleys: Local Terrain Shape
+ * Adds hills, river beds, local variation
+ */
+function getPeaksValleys(x, z) {
+    // Higher frequency for local details
+    return FastNoise.fractal(x * 0.01, z * 0.01, 3);
+}
+
+// ============== TERRAIN SPLINES ==============
+
+// Continentalness Height Spline
+// Maps C-noise to base height (Ocean -> Beach -> Land -> MountainBase)
+const C_SPLINE = [
+    [-1.0, -25], // Deep Ocean
+    [-0.6, -10], // Shallow Ocean
+    [-0.2, -2],  // Coast
+    [0.0, 5],  // Plains
+    [0.4, 20], // Hills/Plateau
+    [1.0, 60]  // High Interior
+];
+
+// Erosion Factor
+// How much the mountains override the base height
+// If erosion is LOW (-1), we allow big peaks. If HIGH (1), we flatten them.
+function getErosionFactor(eVal) {
+    // Map -1..1 to a multiplier 1.0..0.0
+    // eVal -1 => factor 1.5 (Rugged)
+    // eVal 1 => factor 0.1 (Flat)
+    return remap(eVal, -1, 1, 1.5, 0.1);
+}
+
+// Peaks & Valleys Spline
+// Maps PV-noise to local height add-on (Valley -> Mound -> Hill)
+const PV_SPLINE = [
+    [-1.0, -10], // Trench/Valley
+    [-0.2, -2],  // Small dip
+    [0.2, 2],  // Small mound
+    [1.0, 15]  // Hill peak
+];
+
+/**
+ * Compute final terrain height at (x, z)
+ * Combining C, E, PV noises via splines
+ */
+function getTerrainHeight(x, z) {
+    const C = getContinentalness(x, z);
+    const E = getErosion(x, z);
+    const PV = getPeaksValleys(x, z);
+
+    // 1. Base Height from Continentalness
+    const baseHeight = spline(C, C_SPLINE);
+
+    // 2. Local Variation from PeaksValleys
+    // Scaled by Erosion (High erosion = squashed features)
+    const erosionFactor = getErosionFactor(E);
+    const localHeight = spline(PV, PV_SPLINE) * erosionFactor;
+
+    // 3. Mountain Ridge Injector
+    // If Erosion is VERY low (< -0.5) AND Continentalness is High (> 0.3), spawn Mega Peaks
+    let mountainBonus = 0;
+    if (E < -0.4 && C > 0.2) {
+        // Sharp ridged noise for peaks
+        const ridge = FastNoise.rigid(x * 0.008, z * 0.008, 4);
+        // ridge is 0..1
+        mountainBonus = ridge * 60; // Up to 60 units high
+
+        // Mask: fade out at edges of mountain zone
+        const mask = Math.min(remap(E, -0.4, -0.6, 0, 1), remap(C, 0.2, 0.4, 0, 1));
+        mountainBonus *= mask;
+    }
+
+    // 4. Rocky Micro-Detail
+    // MASK IT OUT in flat areas (Erosion > 0) so beaches/plains are smooth
+    let detailAmplitude = 1.5;
+    if (E > 0.0) {
+        // Fade out detail as terrain gets flatter
+        // E=0 -> Amp=1.5
+        // E=0.5 -> Amp=0.2
+        detailAmplitude = remap(E, 0.0, 0.5, 1.5, 0.2);
+    }
+
+    // Squashing factor for extremely flat areas (Beaches/Plains)
+    // If Erosion is high (> 0.3), force localHeight to be very small
+    let flatnessMultiplier = 1.0;
+    if (E > 0.3) {
+        flatnessMultiplier = 0.2; // 20% of original height variation
+    }
+
+    const detail = FastNoise.noise(x * 0.15, z * 0.15) * detailAmplitude;
+
+    return baseHeight + (localHeight * flatnessMultiplier) + mountainBonus + detail;
+}
+
+/**
+ * Determine Biome from C, E, PV, Height
+ */
+function getBiome(height, C, E, PV) {
+    if (height < WATER_LEVEL) return 'ocean';
+    if (height < WATER_LEVEL + 3) return 'beach';
+
+    // Inland biomes decided by Erosion & Temp (simulated by C or PV)
+
+    if (E < -0.4 && height > 30) return 'mountain'; // Low erosion, high up
+
+    if (PV > 0.6) return 'forest'; // Hilly areas often forests
+
+    if (E > 0.4) return 'plain'; // High erosion = flat plains
+
+    if (C > 0.6) return 'jungle'; // Deep inland
+
+    return 'hill'; // Default
+}
+
+// Tree/Rock densities per biome
+// Tree/Rock densities per biome
+const BIOME_CONFIG = {
+    ocean: { tree: 0, rock: 0, shrub: 0, types: [] },
+    beach: { tree: 0, rock: 0.1, shrub: 0.1, types: [] },
+    plain: { tree: 0.02, rock: 0.01, shrub: 1.0, types: ['Tree', 'Tree2'] },
+    forest: { tree: 0.3, rock: 0.1, shrub: 1.5, types: ['Pine Tree', 'Tree', 'Big Tree'] },
+    jungle: { tree: 0.5, rock: 0.05, shrub: 2.0, types: ['Big Tree', 'Tree'] },
+    hill: { tree: 0.1, rock: 0.3, shrub: 0.5, types: ['Pine Tree'] },
+    mountain: { tree: 0.02, rock: 1.0, shrub: 0.1, types: ['Pine Tree'] }
 };
 
-// Simple noise function for terrain generation
+// ============== CHUNK GENERATION ==============
+
+// ============== CHUNK GENERATION ==============
+
 function seededRandom(seed) {
+    // Simple fast random for placement logic (not terrain shape)
     const x = Math.sin(seed) * 10000;
     return x - Math.floor(x);
 }
 
-function noise2D(x, z, seed) {
-    const n = Math.sin(x * 12.9898 + z * 78.233 + seed) * 43758.5453;
-    return n - Math.floor(n);
-}
+/**
+ * Calculate terrain slope at a position
+ */
+function calculateSlope(x, z) {
+    const sampleDist = 1.0; // Sample 1 meter away
+    const h = getTerrainHeight(x, z);
+    const hx = getTerrainHeight(x + sampleDist, z);
+    const hz = getTerrainHeight(x, z + sampleDist);
 
-function smoothNoise(x, z, seed) {
-    const corners = (noise2D(x - 1, z - 1, seed) + noise2D(x + 1, z - 1, seed) +
-        noise2D(x - 1, z + 1, seed) + noise2D(x + 1, z + 1, seed)) / 16;
-    const sides = (noise2D(x - 1, z, seed) + noise2D(x + 1, z, seed) +
-        noise2D(x, z - 1, seed) + noise2D(x, z + 1, seed)) / 8;
-    const center = noise2D(x, z, seed) / 4;
-    return corners + sides + center;
-}
+    const slopeX = Math.abs(hx - h) / sampleDist;
+    const slopeZ = Math.abs(hz - h) / sampleDist;
 
-function interpolatedNoise(x, z, seed) {
-    const intX = Math.floor(x);
-    const fracX = x - intX;
-    const intZ = Math.floor(z);
-    const fracZ = z - intZ;
-
-    const v1 = smoothNoise(intX, intZ, seed);
-    const v2 = smoothNoise(intX + 1, intZ, seed);
-    const v3 = smoothNoise(intX, intZ + 1, seed);
-    const v4 = smoothNoise(intX + 1, intZ + 1, seed);
-
-    const i1 = v1 * (1 - fracX) + v2 * fracX;
-    const i2 = v3 * (1 - fracX) + v4 * fracX;
-
-    return i1 * (1 - fracZ) + i2 * fracZ;
-}
-
-function perlinNoise(x, z, seed, octaves = 4) {
-    let total = 0;
-    let frequency = 0.05;
-    let amplitude = 1;
-    let maxValue = 0;
-
-    for (let i = 0; i < octaves; i++) {
-        total += interpolatedNoise(x * frequency, z * frequency, seed) * amplitude;
-        maxValue += amplitude;
-        amplitude *= 0.5;
-        frequency *= 2;
-    }
-
-    return total / maxValue;
+    return Math.max(slopeX, slopeZ);
 }
 
 /**
- * Determine biome type based on position using dual noise (elevation + moisture)
- * Uses low-frequency noise for large biome regions
+ * Determine terrain material based on height, slope, and continentalness
  */
-function getBiome(x, z) {
-    // Elevation noise - determines mountain vs lowland (very low frequency for large regions)
-    const elevationNoise = perlinNoise(x * 0.2, z * 0.2, WORLD_SEED, 2);
+function getTerrainMaterial(height, slope, continentalness) {
+    // Stone on steep slopes or high altitudes
+    if (slope > 0.6) return 'stone';
+    if (height > 30) return 'stone';
 
-    // Moisture noise - determines forest vs plain (different seed, low frequency)
-    const moistureNoise = perlinNoise(x * 0.15, z * 0.15, WORLD_SEED + 5000, 2);
+    // Sand on beaches
+    if (height < BEACH_HEIGHT && continentalness < 0) return 'sand';
 
-    // Determine biome based on combined values
-    // Lowered thresholds for more variety
-    if (elevationNoise > 0.7) {
-        return 'mountain';  // High elevation = mountains (less common)
-    } else if (elevationNoise > 0.55) {
-        return 'hill';      // Medium-high elevation = hills
-    } else if (elevationNoise < 0.25 && moistureNoise < 0.35) {
-        return 'beach';     // Low elevation + low moisture = beach/sand
-    } else if (moistureNoise > 0.4) {
-        return 'forest';    // Low elevation + high moisture = forest (more common)
-    } else {
-        return 'plain';     // Default = plains
-    }
+    // Default to grass/dirt
+    return 'grass';
 }
 
-/**
- * Get biome-aware height at a specific world position
- * Uses multiple noise octaves for natural variation
- */
-function getBiomeHeight(wx, wz, biome) {
-    const biomeConfig = BIOMES[biome];
 
-    // Multi-octave noise for more natural terrain
-    const noise1 = perlinNoise(wx * 1.0, wz * 1.0, WORLD_SEED, 4);     // Main terrain
-    const noise2 = perlinNoise(wx * 0.5, wz * 0.5, WORLD_SEED + 100, 2); // Large hills
-    const noise3 = perlinNoise(wx * 2.0, wz * 2.0, WORLD_SEED + 200, 2); // Small detail
-
-    // Blend noise for natural feel
-    const blendedNoise = noise1 * 0.6 + noise2 * 0.3 + noise3 * 0.1;
-
-    return biomeConfig.baseHeight + blendedNoise * biomeConfig.heightMultiplier;
-}
-
-// ============== LAKE & OCEAN SYSTEM ==============
-// Water fills low areas - simple and seamless
-
-const WATER_LEVEL = 4.0; // Global water level - areas below this are underwater
-const BEACH_HEIGHT = 5.5; // Sand appears between water level and this height (Narrower band)
-
-/**
- * Check if a position should have water (lake/ocean)
- */
-function isUnderwater(height) {
-    return height < WATER_LEVEL;
-}
-
-/**
- * Get terrain type for texturing based on biome and height
- */
-function getTerrainType(biome, height) {
-    // Underwater - no terrain visible
-    if (height < WATER_LEVEL) {
-        return 'underwater';
-    }
-
-    // Near water - sand/beach
-    if (height < BEACH_HEIGHT) {
-        return 'sand';
-    }
-
-    // Based on biome
-    switch (biome) {
-        case 'mountain':
-            return height > 15 ? 'rock' : 'grass';
-        case 'hill':
-            return height > 12 ? 'rock' : 'grass';
-        case 'forest':
-            return 'grass_dark';
-        default: // plain
-            return 'grass';
-    }
-}
-
-// Generate chunk data with biome awareness
 function generateChunk(cx, cz) {
-    const resolution = 10; // 10x10 height samples per chunk
+    const resolution = RESOLUTION;
     const heightmap = [];
     const trees = [];
     const rocks = [];
+    const shrubs = [];
 
     const worldX = cx * CHUNK_SIZE;
     const worldZ = cz * CHUNK_SIZE;
 
-    // Determine chunk's primary biome (center of chunk)
-    const chunkCenterX = worldX + CHUNK_SIZE / 2;
-    const chunkCenterZ = worldZ + CHUNK_SIZE / 2;
-    const biome = getBiome(chunkCenterX, chunkCenterZ);
-    const biomeConfig = BIOMES[biome];
-
-    // Track if this chunk has any water (low areas)
     let hasWater = false;
+    let totalHeight = 0;
 
-    // Generate heightmap with biome-specific heights
+    // 1. Generate Heightmap
     for (let i = 0; i <= resolution; i++) {
         heightmap[i] = [];
         for (let j = 0; j <= resolution; j++) {
             const wx = worldX + (i / resolution) * CHUNK_SIZE;
             const wz = worldZ + (j / resolution) * CHUNK_SIZE;
 
-            // Get height based on biome at this specific point
-            const localBiome = getBiome(wx, wz);
-            const height = getBiomeHeight(wx, wz, localBiome);
-
+            const height = getTerrainHeight(wx, wz);
             heightmap[i][j] = height;
+            totalHeight += height;
 
-            // Track water areas
-            if (height < WATER_LEVEL) {
-                hasWater = true;
+            if (height < WATER_LEVEL) hasWater = true;
+        }
+    }
+
+    // 2. Determine Primary Biome (Center of chunk)
+    const centerX = worldX + CHUNK_SIZE / 2;
+    const centerZ = worldZ + CHUNK_SIZE / 2;
+    // Sample noise at center
+    const centerC = getContinentalness(centerX, centerZ);
+    const centerE = getErosion(centerX, centerZ);
+    const centerPV = getPeaksValleys(centerX, centerZ);
+    const avgHeight = totalHeight / ((resolution + 1) ** 2);
+
+    const biome = getBiome(avgHeight, centerC, centerE, centerPV);
+    const conf = BIOME_CONFIG[biome];
+
+    // 3. Populate Objects (Trees/Rocks)
+    if (conf) {
+        // Tree Pass
+        const countMult = 0.5; // Base Multiplier (Reduced again: 5 -> 2 -> 0.5)
+        const treeCount = Math.floor(countMult * CHUNK_SIZE * conf.tree);
+
+        for (let k = 0; k < treeCount; k++) {
+            // Random pos in chunk
+            const r1 = seededRandom(cx * 100 + cz + k);
+            const r2 = seededRandom(cz * 100 + cx + k);
+
+            const tx = worldX + r1 * CHUNK_SIZE;
+            const tz = worldZ + r2 * CHUNK_SIZE;
+
+            // Get height at this pos
+            const ty = getTerrainHeight(tx, tz);
+
+            // Conditions
+            if (ty < WATER_LEVEL + 0.5) continue; // Not underwater
+
+            // Type
+            const typeIdx = Math.floor(seededRandom(k) * conf.types.length);
+            const tType = conf.types[typeIdx];
+            if (!tType) continue;
+
+            const scale = 0.8 + seededRandom(k + 1) * 0.5;
+
+            trees.push({
+                type: tType,
+                x: tx, y: ty, z: tz,
+                scale: scale
+            });
+        }
+
+        // Rock Pass
+        if (conf.rock > 0) {
+            // Reduced rock multiplier from 1.0 to 0.3
+            const rockCount = Math.floor(0.3 * CHUNK_SIZE * conf.rock);
+            for (let k = 0; k < rockCount; k++) {
+                const r1 = seededRandom(cx * 500 + cz + k * 2);
+                const r2 = seededRandom(cz * 500 + cx + k * 2);
+                const rx = worldX + r1 * CHUNK_SIZE;
+                const rz = worldZ + r2 * CHUNK_SIZE;
+                const ry = getTerrainHeight(rx, rz);
+                if (ry < WATER_LEVEL - 2) continue; // Allow some underwater rocks
+
+                let rockType = Math.floor(seededRandom(k * 3) * 6); // 0-5
+                if (rockType === 1) rockType = 0; // Skip Rock 2 (bad collider), replace with Rock 1
+
+                rocks.push({
+                    type: rockType,
+                    x: rx, y: ry, z: rz,
+                    scale: 0.2 + seededRandom(k) * 0.3,
+                    rotation: seededRandom(k) * 360
+                });
+            }
+        }
+
+        // Shrub Pass (ADDED MISSING LOOP)
+        if (conf.shrub > 0) {
+            const shrubCount = Math.floor(5 * CHUNK_SIZE * conf.shrub);
+            for (let k = 0; k < shrubCount; k++) {
+                const r1 = seededRandom(cx * 900 + cz + k * 5);
+                const r2 = seededRandom(cz * 900 + cx + k * 5);
+
+                const sx = worldX + r1 * CHUNK_SIZE;
+                const sz = worldZ + r2 * CHUNK_SIZE;
+                const sy = getTerrainHeight(sx, sz);
+
+                if (sy < WATER_LEVEL + 0.2) continue; // Not underwater
+
+                shrubs.push({
+                    type: Math.floor(seededRandom(k) * 5), // 0-4
+                    x: sx, y: sy, z: sz,
+                    scale: 1.2 + seededRandom(k + 3) * 1.0,
+                    rotation: seededRandom(k) * 360
+                });
             }
         }
     }
 
-    // Generate trees based on biome density (skip underwater areas)
-    const baseTreeCount = Math.floor(seededRandom(cx * 1000 + cz + WORLD_SEED) * 5) + 2;
-    const treeCount = Math.floor(baseTreeCount * biomeConfig.treeDensity);
-
-    for (let i = 0; i < treeCount; i++) {
-        const tx = worldX + seededRandom(cx * 100 + cz * 10 + i + WORLD_SEED) * CHUNK_SIZE;
-        const tz = worldZ + seededRandom(cz * 100 + cx * 10 + i + WORLD_SEED * 2) * CHUNK_SIZE;
-
-        // Get height at tree position
-        const nearestI = Math.floor(((tx - worldX) / CHUNK_SIZE) * resolution);
-        const nearestJ = Math.floor(((tz - worldZ) / CHUNK_SIZE) * resolution);
-        const treeHeight = heightmap[Math.min(nearestI, resolution)][Math.min(nearestJ, resolution)];
-
-        // Skip trees underwater or on sand
-        if (treeHeight < BEACH_HEIGHT) continue;
-
-        // Tree type based on biome
-        let treeType = 'Tree';
-        if (biome === 'forest') {
-            const treeRand = seededRandom(tx + tz + WORLD_SEED * 3);
-            if (treeRand < 0.3) treeType = 'Pine Tree';
-            else if (treeRand < 0.5) treeType = 'Tree2';
-            else if (treeRand < 0.7) treeType = 'Big Tree';
-        } else if (biome === 'plain') {
-            treeType = seededRandom(tx * tz + WORLD_SEED * 4) < 0.5 ? 'Tree' : 'Tree2';
-        } else if (biome === 'mountain' || biome === 'hill') {
-            treeType = 'Pine Tree';
-        }
-
-        const scale = 0.8 + seededRandom(tx + tz * 2 + WORLD_SEED) * 0.4;
-
-        trees.push({
-            type: treeType,
-            x: tx,
-            y: treeHeight,
-            z: tz,
-            scale: scale
-        });
-    }
-
-    // Generate rocks for mountain/hill biomes (skip underwater)
-    const rockCount = (biome === 'mountain' || biome === 'hill')
-        ? Math.floor(seededRandom(cx * 500 + cz * 2 + WORLD_SEED) * 8) + 3
-        : Math.floor(seededRandom(cx * 500 + cz * 2 + WORLD_SEED) * 2);
-
-    for (let i = 0; i < rockCount; i++) {
-        const rx = worldX + seededRandom(cx * 200 + cz * 20 + i + WORLD_SEED * 3) * CHUNK_SIZE;
-        const rz = worldZ + seededRandom(cz * 200 + cx * 20 + i + WORLD_SEED * 4) * CHUNK_SIZE;
-
-        const nearestI = Math.floor(((rx - worldX) / CHUNK_SIZE) * resolution);
-        const nearestJ = Math.floor(((rz - worldZ) / CHUNK_SIZE) * resolution);
-        const ry = heightmap[Math.min(nearestI, resolution)][Math.min(nearestJ, resolution)];
-
-        // Skip rocks underwater
-        if (ry < WATER_LEVEL) continue;
-
-        const rockTypes = ['SmallRock', 'MediumRock', 'LargeRock', 'Boulder'];
-        const rockTypeIndex = Math.floor(seededRandom(rx + rz + WORLD_SEED * 5) * rockTypes.length);
-        const rotation = seededRandom(rx * rz + WORLD_SEED * 6) * 360;
-        let scale = 0.5 + seededRandom(rx + rz + WORLD_SEED * 7) * 1.5;
-        if (rockTypes[rockTypeIndex] === 'Boulder') scale *= 2;
-        if (rockTypes[rockTypeIndex] === 'LargeRock') scale *= 1.5;
-
-        rocks.push({
-            type: rockTypes[rockTypeIndex],
-            x: rx,
-            y: ry,
-            z: rz,
-            scale: scale,
-            rotation: rotation
-        });
-    }
-
-    // Calculate average slope of the chunk
-    let totalSlope = 0;
-    let slopeCount = 0;
-    for (let i = 0; i < resolution; i++) {
-        for (let j = 0; j < resolution; j++) {
-            const h = heightmap[i][j];
-            const hRight = heightmap[i + 1] ? heightmap[i + 1][j] : h;
-            const hDown = heightmap[i][j + 1] || h;
-
-            // Calculate slope as height difference per unit
-            const slopeX = Math.abs(h - hRight);
-            const slopeZ = Math.abs(h - hDown);
-            const slope = Math.max(slopeX, slopeZ);
-
-            totalSlope += slope;
-            slopeCount++;
-        }
-    }
-    const avgSlope = slopeCount > 0 ? totalSlope / slopeCount : 0;
-    const isSteep = avgSlope > 0.8; // Steep if average slope > 0.8
+    // Placeholder roadmap (empty for now)
+    const roadmap = Array(resolution + 1).fill(0).map(() => Array(resolution + 1).fill(0));
 
     return {
-        cx, cz, biome, heightmap, trees, rocks,
-        hasWater: hasWater,
-        waterLevel: WATER_LEVEL,
-        isSteep: isSteep  // True if chunk has steep slopes (use rock texture)
+        cx, cz, biome, heightmap, trees, rocks, shrubs, roadmap,
+        hasWater, waterLevel: WATER_LEVEL, isSteep: false
     };
 }
 
 /**
- * Get terrain height at any world position (x, z)
- * This uses the same perlinNoise function as chunk generation
- * Returns Y coordinate for spawning players above terrain
+ * Get terrain height at any world position
+ * Uses the new layered noise system
  */
 async function getTerrainHeightAt(x, z) {
-    // Calculate which chunk this position belongs to
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
 
-    // Try to get chunk from database
     let chunkData = await db.getChunk(cx, cz);
 
-    // If chunk doesn't exist, generate it (or use procedural calculation)
     if (!chunkData) {
-        // Option 1: Generate and save chunk
-        // chunkData = generateChunk(cx, cz);
-        // await db.saveChunk(cx, cz, chunkData);
-
-        // Option 2: Calculate height directly without loading full chunk (more efficient)
-        // Use the same noise function as generateChunk
-        const height = perlinNoise(x, z, WORLD_SEED) * 40;
-        return height + 0.5; // Add 0.5 units above terrain for safe spawn
+        // Calculate height directly using new terrain system
+        const height = getTerrainHeight(x, z);
+        return height + 0.5;
     }
 
     // Interpolate height from heightmap
     const worldX = cx * CHUNK_SIZE;
     const worldZ = cz * CHUNK_SIZE;
-    const resolution = 10;
+    const resolution = chunkData.heightmap.length - 1;
 
-    // Position within chunk (0-1)
     const localX = (x - worldX) / CHUNK_SIZE;
     const localZ = (z - worldZ) / CHUNK_SIZE;
 
-    // Heightmap indices (0-10)
     const i = localX * resolution;
     const j = localZ * resolution;
 
-    // Get surrounding heightmap values
     const i0 = Math.floor(i);
     const i1 = Math.min(i0 + 1, resolution);
     const j0 = Math.floor(j);
     const j1 = Math.min(j0 + 1, resolution);
 
-    // Bilinear interpolation
     const fracX = i - i0;
     const fracZ = j - j0;
 
@@ -394,7 +420,7 @@ async function getTerrainHeightAt(x, z) {
     const h1 = h01 * (1 - fracX) + h11 * fracX;
     const height = h0 * (1 - fracZ) + h1 * fracZ;
 
-    return height + 0.5; // Add 0.5 units above terrain for safe spawn
+    return height + 0.5;
 }
 
 // Notify players within range of an event
@@ -525,15 +551,42 @@ io.on('connection', (socket) => {
 
     // --- TERRAIN CHUNKS ---
     socket.on('requestChunks', async (chunks) => {
-        for (const { cx, cz } of chunks) {
+        const startTime = Date.now();
+        console.log(`[${socket.id}] Requesting ${chunks.length} chunks`);
+
+        // THROTTLE: Process max 4 chunks per request to prevent event loop blocking
+        const MAX_CHUNKS_PER_REQUEST = 4;
+        const chunksToProcess = chunks.slice(0, MAX_CHUNKS_PER_REQUEST);
+
+        if (chunks.length > MAX_CHUNKS_PER_REQUEST) {
+            console.warn(`[${socket.id}] Request limited: ${chunks.length} -> ${MAX_CHUNKS_PER_REQUEST} chunks (client should request fewer at a time)`);
+        }
+
+        let generatedCount = 0;
+        let cachedCount = 0;
+
+        for (const { cx, cz } of chunksToProcess) {
+            const chunkStartTime = Date.now();
+
             let chunkData = await db.getChunk(cx, cz);
             if (!chunkData) {
                 // Generate and save new chunk
                 chunkData = generateChunk(cx, cz);
                 await db.saveChunk(cx, cz, chunkData);
+                generatedCount++;
+
+                const genTime = Date.now() - chunkStartTime;
+                if (genTime > 50) {
+                    console.warn(`[SLOW] Chunk (${cx}, ${cz}) generation took ${genTime}ms`);
+                }
+            } else {
+                cachedCount++;
             }
             socket.emit('chunkData', chunkData);
         }
+
+        const totalTime = Date.now() - startTime;
+        console.log(`[${socket.id}] Sent ${chunksToProcess.length} chunks (${generatedCount} generated, ${cachedCount} cached) in ${totalTime}ms`);
     });
 
     // --- WORLD ITEMS ---
@@ -558,6 +611,103 @@ io.on('connection', (socket) => {
 
             console.log(`Item ${itemId} picked up by ${socket.id}`);
         }
+    });
+
+    // --- TERRAIN MODIFICATION (DIGGING) ---
+    socket.on('digTerrain', async (data) => {
+        const { x, y, z, shape } = data;
+        const playerState = getPlayer(socket.id);
+
+        if (!playerState) {
+            console.warn(`[digTerrain] Player not found: ${socket.id}`);
+            return;
+        }
+
+        console.log(`[digTerrain] ${playerState.username} digging at (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) shape: ${shape}`);
+
+        // Get terrain height at dig position
+        const terrainHeight = getTerrainHeight(x, z);
+
+        // Validate dig position (must be on ground, not midair)
+        if (Math.abs(y - terrainHeight) > 1.0) {
+            console.warn(`[digTerrain] Invalid dig position: y=${y}, terrainHeight=${terrainHeight}`);
+            return;
+        }
+
+        // Determine material based on terrain properties
+        const c = getContinentalness(x, z);
+        const slope = calculateSlope(x, z);
+        const material = getTerrainMaterial(terrainHeight, slope, c);
+
+        console.log(`[digTerrain] Material: ${material}, height: ${terrainHeight.toFixed(2)}, slope: ${slope.toFixed(2)}`);
+
+        // Find chunk coordinates
+        const cx = Math.floor(x / CHUNK_SIZE);
+        const cz = Math.floor(z / CHUNK_SIZE);
+
+        // Load chunk
+        let chunkData = await db.getChunk(cx, cz);
+        if (!chunkData) {
+            chunkData = generateChunk(cx, cz);
+            await db.saveChunk(cx, cz, chunkData);
+        }
+
+        // Modify heightmap to create hole
+        const digSize = 2.0; // 2x2 meter square (larger for cleaner edges)
+        const digDepth = 1.0; // 1 meter deep (more visible)
+        const modifiedHeightmap = JSON.parse(JSON.stringify(chunkData.heightmap)); // Deep copy
+
+        // Calculate affected vertices in heightmap
+        const localX = x - (cx * CHUNK_SIZE);
+        const localZ = z - (cz * CHUNK_SIZE);
+        const resolution = RESOLUTION;
+
+        // Calculate vertex indices that fall within dig area
+        const halfSize = digSize / 2;
+        const minX = localX - halfSize;
+        const maxX = localX + halfSize;
+        const minZ = localZ - halfSize;
+        const maxZ = localZ + halfSize;
+
+        for (let i = 0; i <= resolution; i++) {
+            for (let j = 0; j <= resolution; j++) {
+                const vx = (i / resolution) * CHUNK_SIZE;
+                const vz = (j / resolution) * CHUNK_SIZE;
+
+                // Check if vertex is within square bounds
+                if (vx >= minX && vx <= maxX && vz >= minZ && vz <= maxZ) {
+                    // Lower this vertex uniformly
+                    modifiedHeightmap[i][j] -= digDepth;
+                }
+            }
+        }
+
+
+        // Update chunk data
+        chunkData.heightmap = modifiedHeightmap;
+        await db.saveChunk(cx, cz, chunkData);
+
+        // Spawn material cube
+        const cubeId = `cube_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const cube = {
+            id: cubeId,
+            material: material,
+            x: x,
+            y: terrainHeight + 0.5, // Pop up from ground
+            z: z,
+            velocityY: 2.0 // Initial upward velocity
+        };
+
+        // Broadcast terrain modification to nearby players
+        const nearby = getNearbyPlayers(x, z, UPDATE_RADIUS);
+        nearby.forEach(target => {
+            io.to(target.socketId).emit('terrainModified', {
+                chunk: chunkData,
+                cube: cube
+            });
+        });
+
+        console.log(`[digTerrain] Chunk (${cx}, ${cz}) modified, material cube spawned: ${material}`);
     });
 
     // --- GAMEPLAY ---

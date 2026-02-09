@@ -30,6 +30,9 @@ class PlayerState {
         this.moveDirY = 0;
         this.animationState = 'idle'; // idle, run, jump, die
 
+        // Tool sync - what tool the player has equipped
+        this.toolId = null; // null = no tool, 'sword', 'axe', 'pickaxe', 'shovel'
+
         // Meta
         this.model = dbData.model || 'Ninja';
         this.lastUpdate = Date.now();
@@ -64,6 +67,12 @@ class PlayerState {
         this.moveDirY = data.moveDirY ?? this.moveDirY;
 
         this.animationState = data.animationState ?? this.animationState;
+
+        // Tool sync - update equipped tool if provided
+        if (data.toolId !== undefined) {
+            this.toolId = data.toolId;
+        }
+
         this.lastUpdate = Date.now();
     }
 
@@ -148,6 +157,7 @@ class PlayerState {
             model: this.model,
             animationState: this.animationState,
             isOnline: this.isOnline,
+            toolId: this.toolId, // Equipped tool for display on other clients
             inventory: []
         };
     }
