@@ -197,12 +197,12 @@ function getBiome(height, C, E, PV) {
 // Tree/Rock densities per biome
 const BIOME_CONFIG = {
     ocean: { tree: 0, rock: 0, shrub: 0, types: [] },
-    beach: { tree: 0, rock: 0.1, shrub: 0.1, types: [] },
-    plain: { tree: 0.02, rock: 0.01, shrub: 1.0, types: ['Tree', 'Tree2'] },
-    forest: { tree: 0.3, rock: 0.1, shrub: 1.5, types: ['Pine Tree', 'Tree', 'Big Tree'] },
-    jungle: { tree: 0.5, rock: 0.05, shrub: 2.0, types: ['Big Tree', 'Tree'] },
-    hill: { tree: 0.1, rock: 0.3, shrub: 0.5, types: ['Pine Tree'] },
-    mountain: { tree: 0.02, rock: 1.0, shrub: 0.1, types: ['Pine Tree'] }
+    beach: { tree: 0, rock: 0.01, shrub: 0.02, types: [] },
+    plain: { tree: 0.005, rock: 0.002, shrub: 0.08, types: ['Tree', 'Tree2'] },
+    forest: { tree: 0.04, rock: 0.01, shrub: 0.12, types: ['Pine Tree', 'Tree', 'Big Tree'] },
+    jungle: { tree: 0.06, rock: 0.008, shrub: 0.15, types: ['Big Tree', 'Tree'] },
+    hill: { tree: 0.015, rock: 0.04, shrub: 0.05, types: ['Pine Tree'] },
+    mountain: { tree: 0.005, rock: 0.08, shrub: 0.02, types: ['Pine Tree'] }
 };
 
 // ============== CHUNK GENERATION ==============
@@ -215,35 +215,9 @@ function seededRandom(seed) {
     return x - Math.floor(x);
 }
 
-/**
- * Calculate terrain slope at a position
- */
-function calculateSlope(x, z) {
-    const sampleDist = 1.0; // Sample 1 meter away
-    const h = getTerrainHeight(x, z);
-    const hx = getTerrainHeight(x + sampleDist, z);
-    const hz = getTerrainHeight(x, z + sampleDist);
 
-    const slopeX = Math.abs(hx - h) / sampleDist;
-    const slopeZ = Math.abs(hz - h) / sampleDist;
 
-    return Math.max(slopeX, slopeZ);
-}
 
-/**
- * Determine terrain material based on height, slope, and continentalness
- */
-function getTerrainMaterial(height, slope, continentalness) {
-    // Stone on steep slopes or high altitudes
-    if (slope > 0.6) return 'stone';
-    if (height > 30) return 'stone';
-
-    // Sand on beaches
-    if (height < BEACH_HEIGHT && continentalness < 0) return 'sand';
-
-    // Default to grass/dirt
-    return 'grass';
-}
 
 
 function generateChunk(cx, cz) {
@@ -527,7 +501,8 @@ io.on('connection', (socket) => {
                 // Send full state to the logging-in player
                 socket.emit('loginSuccess', {
                     id: socket.id,
-                    player: playerState.toFullState()
+                    player: playerState.toFullState(),
+                    treeStates: global.treeStates || {} // Send initial tree states
                 });
 
                 // Send existing players to new player (network packets for other players)
@@ -550,16 +525,33 @@ io.on('connection', (socket) => {
     });
 
     // --- TERRAIN CHUNKS ---
-    socket.on('requestChunks', async (chunks) => {
+    socket.on('requestChunks', async (data) => {
         const startTime = Date.now();
-        console.log(`[${socket.id}] Requesting ${chunks.length} chunks`);
 
-        // THROTTLE: Process max 4 chunks per request to prevent event loop blocking
-        const MAX_CHUNKS_PER_REQUEST = 4;
+        // Support both old format (array) and new format (object with chunks + isInitialLoad)
+        let chunks, isInitialLoad;
+        if (Array.isArray(data)) {
+            // Old format: just an array of chunks
+            chunks = data;
+            isInitialLoad = false;
+        } else {
+            // New format: object with chunks array and isInitialLoad flag
+            chunks = data.chunks || [];
+            isInitialLoad = data.isInitialLoad || false;
+        }
+
+        // THROTTLE: Use different limits for initial load vs gameplay
+        // Initial load: 16 chunks (faster loading, acceptable during login)
+        // Gameplay: 4 chunks (prevents event loop blocking during movement)
+        const MAX_CHUNKS_PER_REQUEST = isInitialLoad ? 16 : 4;
+        const requestType = isInitialLoad ? 'Initial load' : 'Gameplay';
+
+        console.log(`[${socket.id}] ${requestType} request: ${chunks.length} chunks`);
+
         const chunksToProcess = chunks.slice(0, MAX_CHUNKS_PER_REQUEST);
 
         if (chunks.length > MAX_CHUNKS_PER_REQUEST) {
-            console.warn(`[${socket.id}] Request limited: ${chunks.length} -> ${MAX_CHUNKS_PER_REQUEST} chunks (client should request fewer at a time)`);
+            console.warn(`[${socket.id}] Request limited: ${chunks.length} -> ${MAX_CHUNKS_PER_REQUEST} chunks (${requestType.toLowerCase()})`);
         }
 
         let generatedCount = 0;
@@ -593,8 +585,29 @@ io.on('connection', (socket) => {
     socket.on('getWorldItems', async (data) => {
         // Return items within range of player position
         const { x, z, radius } = data;
-        const items = await db.getItemsInRange(x, z, radius || 100);
-        socket.emit('worldItems', items);
+
+        // 1. Get DB items
+        const dbItems = await db.getItemsInRange(x, z, radius || 100);
+
+        // 2. Get Memory items (that might not be in DB yet or are temporary)
+        const memoryItems = Object.values(worldItems).filter(item => {
+            const dx = item.x - x;
+            const dz = item.z - z;
+            return (dx * dx + dz * dz) <= (radius * radius);
+        });
+
+        // Merge (prefer memory if ID conflict? or just concat if IDs unique)
+        // Set to dedup by ID
+        const combined = [...dbItems];
+        const dbIds = new Set(dbItems.map(i => i.id));
+
+        memoryItems.forEach(item => {
+            if (!dbIds.has(item.id)) {
+                combined.push(item);
+            }
+        });
+
+        socket.emit('worldItems', combined);
     });
 
     socket.on('pickupItem', async (data) => {
@@ -602,113 +615,110 @@ io.on('connection', (socket) => {
         const item = worldItems[itemId];
 
         if (item) {
-            // Remove from DB and memory
-            await db.removeWorldItem(itemId);
+            // Remove from DB (if exists)
+            await db.removeWorldItem(itemId).catch(() => { });
+            // Remove from memory
             delete worldItems[itemId];
 
-            // Notify nearby players only (50m range)
-            notifyNearby(item.x, item.z, 'itemRemoved', { id: itemId }, 50);
-
-            console.log(`Item ${itemId} picked up by ${socket.id}`);
+            // Notify nearby players
+            io.emit('itemPickedUp', { itemId, playerId: socket.id });
         }
     });
 
-    // --- TERRAIN MODIFICATION (DIGGING) ---
-    socket.on('digTerrain', async (data) => {
-        const { x, y, z, shape } = data;
-        const playerState = getPlayer(socket.id);
+    // --- TREE INTERACTION ---
+    // In-memory tree state (key: "x_z", value: { health, maxHealth, isCut })
 
-        if (!playerState) {
-            console.warn(`[digTerrain] Player not found: ${socket.id}`);
+    socket.on('damageTree', (data) => {
+        const { position, toolId, damage } = data;
+
+        const player = players.get(socket.id);
+        if (!player) return;
+
+        // Validate distance
+        const dx = position.x - player.x;
+        const dz = position.z - player.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > 64) {
+            console.warn(`[Cheat?] Player ${player.username} hit tree too far away (${Math.sqrt(distSq).toFixed(1)}m)`);
             return;
         }
 
-        console.log(`[digTerrain] ${playerState.username} digging at (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) shape: ${shape}`);
+        const treeKey = `${Math.round(position.x)}_${Math.round(position.z)}`;
 
-        // Get terrain height at dig position
-        const terrainHeight = getTerrainHeight(x, z);
+        if (!global.treeStates) global.treeStates = {};
 
-        // Validate dig position (must be on ground, not midair)
-        if (Math.abs(y - terrainHeight) > 1.0) {
-            console.warn(`[digTerrain] Invalid dig position: y=${y}, terrainHeight=${terrainHeight}`);
-            return;
+        if (!global.treeStates[treeKey]) {
+            global.treeStates[treeKey] = { health: 5, maxHealth: 5 };
         }
 
-        // Determine material based on terrain properties
-        const c = getContinentalness(x, z);
-        const slope = calculateSlope(x, z);
-        const material = getTerrainMaterial(terrainHeight, slope, c);
+        const tree = global.treeStates[treeKey];
+        if (tree.isCut) return; // Already cut
 
-        console.log(`[digTerrain] Material: ${material}, height: ${terrainHeight.toFixed(2)}, slope: ${slope.toFixed(2)}`);
+        tree.health -= damage;
 
-        // Find chunk coordinates
-        const cx = Math.floor(x / CHUNK_SIZE);
-        const cz = Math.floor(z / CHUNK_SIZE);
+        if (tree.health <= 0) {
+            // Tree Cut
+            tree.isCut = true;
+            tree.health = 0;
 
-        // Load chunk
-        let chunkData = await db.getChunk(cx, cz);
-        if (!chunkData) {
-            chunkData = generateChunk(cx, cz);
-            await db.saveChunk(cx, cz, chunkData);
-        }
-
-        // Modify heightmap to create hole
-        const digSize = 2.0; // 2x2 meter square (larger for cleaner edges)
-        const digDepth = 1.0; // 1 meter deep (more visible)
-        const modifiedHeightmap = JSON.parse(JSON.stringify(chunkData.heightmap)); // Deep copy
-
-        // Calculate affected vertices in heightmap
-        const localX = x - (cx * CHUNK_SIZE);
-        const localZ = z - (cz * CHUNK_SIZE);
-        const resolution = RESOLUTION;
-
-        // Calculate vertex indices that fall within dig area
-        const halfSize = digSize / 2;
-        const minX = localX - halfSize;
-        const maxX = localX + halfSize;
-        const minZ = localZ - halfSize;
-        const maxZ = localZ + halfSize;
-
-        for (let i = 0; i <= resolution; i++) {
-            for (let j = 0; j <= resolution; j++) {
-                const vx = (i / resolution) * CHUNK_SIZE;
-                const vz = (j / resolution) * CHUNK_SIZE;
-
-                // Check if vertex is within square bounds
-                if (vx >= minX && vx <= maxX && vz >= minZ && vz <= maxZ) {
-                    // Lower this vertex uniformly
-                    modifiedHeightmap[i][j] -= digDepth;
-                }
-            }
-        }
-
-
-        // Update chunk data
-        chunkData.heightmap = modifiedHeightmap;
-        await db.saveChunk(cx, cz, chunkData);
-
-        // Spawn material cube
-        const cubeId = `cube_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const cube = {
-            id: cubeId,
-            material: material,
-            x: x,
-            y: terrainHeight + 0.5, // Pop up from ground
-            z: z,
-            velocityY: 2.0 // Initial upward velocity
-        };
-
-        // Broadcast terrain modification to nearby players
-        const nearby = getNearbyPlayers(x, z, UPDATE_RADIUS);
-        nearby.forEach(target => {
-            io.to(target.socketId).emit('terrainModified', {
-                chunk: chunkData,
-                cube: cube
+            io.emit('treeCut', {
+                position: position,
+                attackerId: socket.id
             });
-        });
+            console.log(`[Game] Tree cut at ${treeKey}`);
 
-        console.log(`[digTerrain] Chunk (${cx}, ${cz}) modified, material cube spawned: ${material}`);
+            // SPAWN WOOD ITEMS (1 min TTL)
+            const woodCount = 10 + Math.floor(Math.random() * 10); // 10-20
+
+            for (let i = 0; i < woodCount; i++) {
+                // Stack Logic: Center at tree, stack vertically
+                // User requested: "placed in place of tree" and "standing vertically togather"
+
+                const wx = position.x;
+                const wz = position.z;
+
+                // Stack up 0.4m per block (approx wood block thickness)
+                // Start a bit higher (0.5) to avoid clipping ground
+                const wy = position.y + 0.5 + (i * 0.4);
+
+                const itemId = `wood_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 5)}`;
+
+                const item = {
+                    id: itemId,
+                    type: 'wood', // Client needs to map this to prefab
+                    x: wx,
+                    y: wy,
+                    z: wz,
+                    created: Date.now()
+                };
+
+                // Add to memory
+                worldItems[itemId] = item;
+
+                // Broadcast spawn
+                io.emit('itemSpawned', item);
+
+                // Remove after 60s
+                setTimeout(() => {
+                    if (worldItems[itemId]) {
+                        delete worldItems[itemId];
+                        io.emit('itemDespawned', { itemId });
+                    }
+                }, 60000);
+            }
+
+        } else {
+            // Tree Damaged
+            io.emit('treeDamaged', {
+                position: position,
+                damage: damage,
+                currentHealth: tree.health,
+                attackerId: socket.id
+            });
+        }
     });
+
+    // --- TERRAIN MODIFICATION (DIGGING) - REMOVED ---
 
     // --- GAMEPLAY ---
     const UPDATE_RADIUS = 200; // Only send updates to players within this range
