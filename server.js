@@ -658,7 +658,7 @@ io.on('connection', (socket) => {
         // Check player inventory
         const invItem = player.inventory.find(i => i.toolId === type);
         if (!invItem || invItem.quantity < 1) {
-            socket.emit('placeFailed', { reason: 'Not enough materials.' });
+            socket.emit('placeFailed', { reason: 'Not enough materials.', x, y, z });
             return;
         }
 
