@@ -7,6 +7,7 @@ class PlayerState {
     constructor(socketId, username, dbData = {}) {
         this.socketId = socketId;
         this.username = username;
+        this.id = dbData.id; // Database ID for persistence
 
         // Position
         this.x = dbData.x || 0;

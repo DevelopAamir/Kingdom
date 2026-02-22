@@ -459,6 +459,10 @@ io.on('connection', (socket) => {
                     players.set(socket.id, existingPlayer);
                     playerState = existingPlayer;
 
+                    // CRITICAL: Reload inventory from DB (user.inventory has latest data)
+                    playerState.inventory = user.inventory;
+                    console.log(`[Server] Reloaded inventory for ${user.username}: ${JSON.stringify(user.inventory)}`);
+
                     // Update model if they changed it
                     if (data.model) {
                         playerState.model = data.model;
@@ -484,6 +488,7 @@ io.on('connection', (socket) => {
 
                     // Create PlayerState from DB data
                     playerState = addPlayer(socket.id, user.username, {
+                        id: user.id, // Database ID for persistence
                         x: user.x,
                         y: terrainY, // Use terrain-aware Y instead of database Y
                         z: user.z,
@@ -496,13 +501,22 @@ io.on('connection', (socket) => {
                         equippedSlot: user.equippedSlot ?? -1,
                         model: data.model || user.model || 'Ninja'
                     });
+
+                    // Fix for existing users with empty inventory (give default tools)
+                    // REMOVED: Starting with empty inventory as requested
+                    if (!playerState.inventory || playerState.inventory.length === 0) {
+                        playerState.inventory = [];
+                        // console.log(`[Server] Restored default inventory for ${user.username}`);
+                    }
                 }
 
                 // Send full state to the logging-in player
                 socket.emit('loginSuccess', {
                     id: socket.id,
                     player: playerState.toFullState(),
-                    treeStates: global.treeStates || {} // Send initial tree states
+                    treeStates: global.treeStates || {},
+                    rockStates: global.rockStates || {},
+                    placedBlocks: Object.values(global.placedBlocks || {})
                 });
 
                 // Send existing players to new player (network packets for other players)
@@ -625,6 +639,145 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- BLOCK PLACEMENT ---
+    socket.on('placeBlock', async (data) => {
+        const player = players.get(socket.id);
+        if (!player) return;
+
+        const { type, x, y, z, rotation_y } = data;
+        const validTypes = ['wood_cube', 'wood_plank', 'wood'];
+        if (!validTypes.includes(type)) return;
+
+        // Ensure inventory is an array (fix for nested {inventory: []} bug)
+        let invArray = player.inventory;
+        if (invArray && typeof invArray === 'object' && !Array.isArray(invArray) && Array.isArray(invArray.inventory)) {
+            invArray = invArray.inventory;
+        }
+        player.inventory = Array.isArray(invArray) ? invArray : [];
+
+        // Check player inventory
+        const invItem = player.inventory.find(i => i.toolId === type);
+        if (!invItem || invItem.quantity < 1) {
+            socket.emit('placeFailed', { reason: 'Not enough materials.' });
+            return;
+        }
+
+        // Consume item
+        invItem.quantity -= 1;
+        if (invItem.quantity <= 0) {
+            player.inventory = player.inventory.filter(i => i.toolId !== type);
+        }
+        await db.updateUserInventory(player.id, player.inventory).catch(() => { });
+
+        // Create block record
+        const blockId = `blk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        const block = {
+            id: blockId, owner_id: player.id, type, x, y, z, rotation_y: rotation_y || 0,
+            health: 40, maxHealth: 40
+        };
+        global.placedBlocks[blockId] = block;
+        await db.savePlacedBlock(block).catch(err => console.error('[DB] savePlacedBlock error:', err));
+
+        console.log(`[Build] ${player.username} placed ${type} at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`);
+
+        // Broadcast to everyone (including placer)
+        io.emit('blockPlaced', block);
+
+        // Sync back the new inventory
+        socket.emit('inventoryUpdate', { inventory: player.inventory });
+    });
+
+    socket.on('damageBlock', async (data) => {
+        const player = players.get(socket.id);
+        if (!player) return;
+
+        const { id, damage } = data;
+        const block = global.placedBlocks[id];
+
+        if (block) {
+            // Initialize health if older block without it
+            if (block.health === undefined) {
+                block.health = 40;
+                block.maxHealth = 40;
+            }
+
+            // Heal block if it hasn't been attacked in 3 seconds (3000ms)
+            const now = Date.now();
+            if (block.lastDamageTime && now - block.lastDamageTime > 3000) {
+                block.health = block.maxHealth;
+            }
+            block.lastDamageTime = now;
+
+            block.health -= (damage || 0);
+
+            if (block.health <= 0) {
+                console.log(`[Build] ${player.username} broke block ${id}`);
+                delete global.placedBlocks[id];
+
+                // Remove from DB
+                await db.removePlacedBlock(id).catch(err => console.error('[DB] removePlacedBlock error:', err));
+
+                // Broadcast destruction
+                io.emit('blockBroken', { id });
+
+                // Spawn floating item for the broken block
+                const itemId = `drop_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+                const wy = block.y + 0.5; // Slightly above block center
+
+                const dropItem = {
+                    id: itemId,
+                    type: block.type, // "wood_cube" or "wood_plank"
+                    x: block.x,
+                    y: wy,
+                    z: block.z,
+                    created: Date.now()
+                };
+
+                // Add to memory
+                global.worldItems = global.worldItems || {};
+                global.worldItems[itemId] = dropItem;
+
+                // Broadcast spawn
+                io.emit('itemSpawned', dropItem);
+
+                // Remove after 60s
+                setTimeout(() => {
+                    if (global.worldItems[itemId]) {
+                        delete global.worldItems[itemId];
+                        io.emit('itemDespawned', { itemId });
+                    }
+                }, 60000);
+            } else {
+                // Block Damaged but not broken
+                io.emit('blockDamaged', {
+                    id: id,
+                    damage: damage,
+                    currentHealth: block.health,
+                    maxHealth: block.maxHealth,
+                    attackerId: socket.id
+                });
+            }
+        }
+    });
+
+    // --- INVENTORY SYNC ---
+    socket.on('updateInventory', (data) => {
+        const player = players.get(socket.id);
+        if (player && data.inventory) {
+            console.log(`[Game] Received inventory update for ${player.username}`);
+            console.log(`[Game] Old inventory:`, JSON.stringify(player.inventory));
+            console.log(`[Game] New inventory:`, JSON.stringify(data.inventory));
+
+            player.inventory = data.inventory;
+            console.log(`[Game] Updated inventory for ${player.username}: ${JSON.stringify(player.inventory)}`);
+
+            // Persist to DB
+            db.updateUserInventory(player.id, player.inventory).catch(err => {
+                console.error(`[DB] Failed to save inventory for ${player.username}:`, err);
+            });
+        }
+    });
+
     // --- TREE INTERACTION ---
     // In-memory tree state (key: "x_z", value: { health, maxHealth, isCut })
 
@@ -648,44 +801,55 @@ io.on('connection', (socket) => {
         if (!global.treeStates) global.treeStates = {};
 
         if (!global.treeStates[treeKey]) {
-            global.treeStates[treeKey] = { health: 5, maxHealth: 5 };
+            global.treeStates[treeKey] = { health: 10, maxHealth: 10 }; // Increased to 10 for bare-hand balance
         }
 
         const tree = global.treeStates[treeKey];
-        if (tree.isCut) return; // Already cut
+        // DEBUG LOG
+        console.log(`[TreeDebug] Hit ${treeKey} | Health: ${tree.health} | Cut: ${tree.isCut} | Dmg: ${damage}`);
+
+        if (tree.isCut) {
+            console.log(`[TreeDebug] Ignored hit on CUT tree ${treeKey}`);
+            return; // Already cut
+        }
 
         tree.health -= damage;
 
         if (tree.health <= 0) {
             // Tree Cut
+            console.log(`[TreeDebug] Tree CUT! ${treeKey}`);
             tree.isCut = true;
             tree.health = 0;
+
+            // Persist to database immediately
+            db.saveTreeState(treeKey, tree).catch(err => {
+                console.error(`[DB] Failed to save tree state for ${treeKey}:`, err);
+            });
 
             io.emit('treeCut', {
                 position: position,
                 attackerId: socket.id
             });
-            console.log(`[Game] Tree cut at ${treeKey}`);
 
             // SPAWN WOOD ITEMS (1 min TTL)
             const woodCount = 10 + Math.floor(Math.random() * 10); // 10-20
 
             for (let i = 0; i < woodCount; i++) {
-                // Stack Logic: Center at tree, stack vertically
-                // User requested: "placed in place of tree" and "standing vertically togather"
+                // Random position around tree (Scatter)
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * 2.0; // 0 to 2 meters radius
 
-                const wx = position.x;
-                const wz = position.z;
+                const wx = position.x + Math.cos(angle) * dist;
+                const wz = position.z + Math.sin(angle) * dist;
 
-                // Stack up 0.4m per block (approx wood block thickness)
-                // Start a bit higher (0.5) to avoid clipping ground
-                const wy = position.y + 0.5 + (i * 0.4);
+                // Start slightly up
+                const wy = position.y + 1.0;
 
                 const itemId = `wood_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 5)}`;
 
                 const item = {
                     id: itemId,
-                    type: 'wood', // Client needs to map this to prefab
+                    type: 'wood',
                     x: wx,
                     y: wy,
                     z: wz,
@@ -713,6 +877,88 @@ io.on('connection', (socket) => {
                 position: position,
                 damage: damage,
                 currentHealth: tree.health,
+                attackerId: socket.id
+            });
+        }
+    });
+
+    // === ROCK DAMAGE ===
+    socket.on('damageRock', (data) => {
+        const { position, toolId, damage } = data;
+
+        // Round position to match terrain grid
+        const rockKey = `${Math.round(position.x)}_${Math.round(position.z)}`;
+
+        // Initialize rock states if not exists
+        if (!global.rockStates) global.rockStates = {};
+
+        if (!global.rockStates[rockKey]) {
+            global.rockStates[rockKey] = { health: 15, maxHealth: 15 }; // Rocks have 15 HP
+        }
+
+        const rock = global.rockStates[rockKey];
+        console.log(`[RockDebug] Hit ${rockKey} | Health: ${rock.health} | Broken: ${rock.isBroken} | Dmg: ${damage}`);
+
+        if (rock.isBroken) {
+            console.log(`[RockDebug] Ignored hit on BROKEN rock ${rockKey}`);
+            return; // Already broken
+        }
+
+        rock.health -= damage;
+
+        if (rock.health <= 0 && !rock.isBroken) {
+            // Rock Broken
+            rock.isBroken = true;
+            console.log(`[RockDebug] Rock BROKEN! ${rockKey}`);
+            rock.health = 0;
+
+            // Save rock state to database
+            db.saveRockState(rockKey, rock).catch(err => {
+                console.error(`[DB] Failed to save rock state for ${rockKey}:`, err);
+            });
+
+
+            io.emit('rockBroken', {
+                position: position,
+                attackerId: socket.id
+            });
+
+            // SPAWN STONE ITEMS (server-decided positions)
+            const stoneCount = 10 + Math.floor(Math.random() * 6); // 10-15 stones
+
+            for (let i = 0; i < stoneCount; i++) {
+                // Random position around rock (Scatter)
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * 1.5; // 0 to 1.5 meters radius
+
+                const sx = position.x + Math.cos(angle) * dist;
+                const sz = position.z + Math.sin(angle) * dist;
+
+                // Start slightly up
+                const sy = position.y + 0.5;
+
+                const itemId = `stone_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 5)}`;
+
+                const item = {
+                    id: itemId,
+                    type: 'stone',
+                    x: sx,
+                    y: sy,
+                    z: sz,
+                    spawnTime: Date.now()
+                };
+
+                worldItems[itemId] = item;
+
+                io.emit('itemSpawned', item);
+            }
+
+        } else {
+            // Rock Damaged
+            io.emit('rockDamaged', {
+                position: position,
+                damage: damage,
+                currentHealth: rock.health,
                 attackerId: socket.id
             });
         }
@@ -843,8 +1089,12 @@ io.on('connection', (socket) => {
         if (playerState) {
             console.log(`[Server] ${playerState.username} went offline. They remain in world as idle.`);
 
+            // Debug: Check inventory before saving
+            const dbObj = playerState.toDBObject();
+            console.log(`[DB] Saving inventory for ${playerState.username}: ${dbObj.inventory}`);
+
             // Save full state to DB
-            db.savePlayerState(playerState.username, playerState.toDBObject());
+            db.savePlayerState(playerState.username, dbObj);
 
             // Notify clients that player went offline (but NOT removed - they stay visible)
             io.emit('playerWentOffline', {
@@ -906,7 +1156,33 @@ app.get('/api/chunk/:cx/:cz', async (req, res) => {
 
 // Initialize and start server
 initWorldItems().then(async () => {
+    // Load tree states from database
+    try {
+        global.treeStates = await db.loadAllTreeStates();
+        console.log(`Loaded ${Object.keys(global.treeStates).length} tree states from DB`);
+    } catch (err) {
+        console.error('[DB] Failed to load tree states:', err);
+        global.treeStates = {};
+    }
 
+    // Load rock states from database
+    try {
+        global.rockStates = await db.loadAllRockStates();
+        console.log(`Loaded ${Object.keys(global.rockStates).length} rock states from DB`);
+    } catch (err) {
+        console.error('[DB] Failed to load rock states:', err);
+        global.rockStates = {};
+    }
+
+    // Load placed blocks from database
+    global.placedBlocks = {};
+    try {
+        const blocks = await db.loadAllPlacedBlocks();
+        for (const b of blocks) global.placedBlocks[b.id] = b;
+        console.log(`Loaded ${blocks.length} placed blocks from DB`);
+    } catch (err) {
+        console.error('[DB] Failed to load placed blocks:', err);
+    }
 
     http.listen(3000, '0.0.0.0', () => {
         console.log('Battlefield server running on *:3000');

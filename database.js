@@ -39,6 +39,32 @@ db.serialize(() => {
         y REAL,
         z REAL
     )`);
+    // Tree states: track cut trees
+    db.run(`CREATE TABLE IF NOT EXISTS tree_states (
+        tree_key TEXT PRIMARY KEY,
+        health INTEGER,
+        max_health INTEGER,
+        is_cut BOOLEAN,
+        cut_timestamp INTEGER
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS rock_states (
+        rock_key TEXT PRIMARY KEY,
+        health INTEGER,
+        max_health INTEGER,
+        is_broken BOOLEAN,
+        broken_timestamp INTEGER
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS placed_blocks (
+        id TEXT PRIMARY KEY,
+        owner_id INTEGER,
+        type TEXT,
+        x REAL,
+        y REAL,
+        z REAL,
+        rotation_y REAL DEFAULT 0
+    )`);
 });
 
 const Database = {
@@ -47,9 +73,12 @@ const Database = {
             try {
                 const hash = await bcrypt.hash(password, 10);
                 // Spawn well above terrain (Y=40) then fall to ground naturally
-                db.run(`INSERT INTO users (username, password, y) VALUES (?, ?, 40.0)`, [username, hash], function (err) {
+                // Empty inventory for new players
+                const defaultInventory = JSON.stringify([]);
+
+                db.run(`INSERT INTO users (username, password, inventory, y) VALUES (?, ?, ?, 40.0)`, [username, hash, defaultInventory], function (err) {
                     if (err) return reject(err);
-                    resolve({ id: this.lastID, username, health: 200, inventory: [] });
+                    resolve({ id: this.lastID, username, health: 200, inventory: JSON.parse(defaultInventory) });
                 });
             } catch (e) {
                 reject(e);
@@ -66,7 +95,17 @@ const Database = {
                 const match = await bcrypt.compare(password, row.password);
                 if (match) {
                     // Parse JSON fields
-                    try { row.inventory = JSON.parse(row.inventory); } catch (e) { row.inventory = []; }
+                    try {
+                        row.inventory = JSON.parse(row.inventory);
+
+                        // Fix corrupt format: {"inventory": [...]} -> [...]
+                        if (row.inventory && typeof row.inventory === 'object' && row.inventory.inventory && Array.isArray(row.inventory.inventory)) {
+                            console.log(`[DB] Detected corrupt inventory format for ${row.username}, unwrapping...`);
+                            row.inventory = row.inventory.inventory;
+                        }
+                    } catch (e) {
+                        row.inventory = [];
+                    }
                     resolve(row);
                 } else {
                     resolve(null); // Wrong password
@@ -91,6 +130,44 @@ const Database = {
                 if (err) console.error("Save Error:", err);
                 else console.log(`[DB] Saved state for ${username}`);
             });
+    },
+
+    updateUserInventory: (id, inventory) => {
+        return new Promise((resolve, reject) => {
+            const invStr = typeof inventory === 'string' ? inventory : JSON.stringify(inventory || []);
+            db.run(`UPDATE users SET inventory = ? WHERE id = ?`, [invStr, id], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    // --- PLACED BLOCKS ---
+    savePlacedBlock: (block) => {
+        return new Promise((resolve, reject) => {
+            db.run(
+                `INSERT OR REPLACE INTO placed_blocks (id, owner_id, type, x, y, z, rotation_y) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [block.id, block.owner_id, block.type, block.x, block.y, block.z, block.rotation_y || 0],
+                (err) => { if (err) reject(err); else resolve(); }
+            );
+        });
+    },
+
+    removePlacedBlock: (id) => {
+        return new Promise((resolve, reject) => {
+            db.run(`DELETE FROM placed_blocks WHERE id = ?`, [id], (err) => {
+                if (err) reject(err); else resolve();
+            });
+        });
+    },
+
+    loadAllPlacedBlocks: () => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT * FROM placed_blocks`, [], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows || []);
+            });
+        });
     },
 
     saveCalibration: (type, dataObj) => {
@@ -190,7 +267,90 @@ const Database = {
                 else resolve();
             });
         });
-    }
+    },
+
+    // --- TREE STATES ---
+    saveTreeState: (treeKey, state) => {
+        return new Promise((resolve, reject) => {
+            db.run(`INSERT OR REPLACE INTO tree_states (tree_key, health, max_health, is_cut, cut_timestamp) VALUES (?, ?, ?, ?, ?)`,
+                [treeKey, state.health || 0, state.maxHealth || 5, state.isCut ? 1 : 0, state.isCut ? Date.now() : null],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+    },
+
+    loadAllTreeStates: () => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT * FROM tree_states`, [], (err, rows) => {
+                if (err) return reject(err);
+
+                // Convert rows to object format { "x_z": { health, maxHealth, isCut } }
+                const treeStates = {};
+                rows.forEach(row => {
+                    treeStates[row.tree_key] = {
+                        health: row.health,
+                        maxHealth: row.max_health,
+                        isCut: row.is_cut === 1
+                    };
+                });
+
+                resolve(treeStates);
+            });
+        });
+    },
+
+    clearOldTreeStates: (daysOld) => {
+        return new Promise((resolve, reject) => {
+            const cutoffTime = Date.now() - (daysOld * 24 * 60 * 60 * 1000);
+            db.run(`DELETE FROM tree_states WHERE cut_timestamp < ?`, [cutoffTime], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    // Rock state functions
+    saveRockState: (rockKey, state) => {
+        return new Promise((resolve, reject) => {
+            db.run(`INSERT OR REPLACE INTO rock_states (rock_key, health, max_health, is_broken, broken_timestamp) VALUES (?, ?, ?, ?, ?)`,
+                [rockKey, state.health || 0, state.maxHealth || 15, state.isBroken ? 1 : 0, state.isBroken ? Date.now() : null],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+    },
+
+    loadAllRockStates: () => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT * FROM rock_states`, [], (err, rows) => {
+                if (err) return reject(err);
+
+                const rockStates = {};
+                rows.forEach(row => {
+                    rockStates[row.rock_key] = {
+                        health: row.health,
+                        maxHealth: row.max_health,
+                        isBroken: row.is_broken === 1
+                    };
+                });
+
+                resolve(rockStates);
+            });
+        });
+    },
+
+    clearOldRockStates: (daysOld) => {
+        return new Promise((resolve, reject) => {
+            const cutoffTime = Date.now() - (daysOld * 24 * 60 * 60 * 1000);
+            db.run(`DELETE FROM rock_states WHERE broken_timestamp < ?`, [cutoffTime], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
 };
 
 module.exports = Database;
