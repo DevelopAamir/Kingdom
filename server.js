@@ -639,7 +639,13 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- BLOCK PLACEMENT ---
+    // --- FOOTSTEP RELAY ---
+    socket.on('playerFootstep', () => {
+        // Relay to all other players — they will play spatial audio at this player's position
+        socket.broadcast.emit('playerFootstep', { id: socket.id });
+    });
+
+
     socket.on('placeBlock', async (data) => {
         const player = players.get(socket.id);
         if (!player) return;
