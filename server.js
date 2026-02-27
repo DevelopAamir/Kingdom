@@ -418,6 +418,26 @@ async function initWorldItems() {
     }
 }
 
+// Initialize players from DB
+async function initPlayers() {
+    try {
+        const users = await db.getAllUsers();
+        let count = 0;
+        users.forEach(user => {
+            // Add as offline player using the addPlayer helper properly
+            const offlineId = "offline_" + user.username;
+
+            // addPlayer(socketId, username, dbData)
+            const state = addPlayer(offlineId, user.username, user);
+
+            state.isOnline = false;
+            count++;
+        });
+        console.log(`Loaded ${count} offline players from DB`);
+    } catch (e) {
+        console.error('Failed to load players:', e);
+    }
+}
 
 
 io.on('connection', (socket) => {
@@ -516,17 +536,28 @@ io.on('connection', (socket) => {
                     player: playerState.toFullState(),
                     treeStates: global.treeStates || {},
                     rockStates: global.rockStates || {},
-                    placedBlocks: Object.values(global.placedBlocks || {})
+                    placedBlocks: Object.values(global.placedBlocks || {}).filter(b => {
+                        const dx = b.x - playerState.x;
+                        const dz = b.z - playerState.z;
+                        return (dx * dx + dz * dz) <= 200 * 200;
+                    })
                 });
 
-                // Send existing players to new player (network packets for other players)
-                socket.emit('currentPlayers', getPlayersObject());
+                // Send nearby players to new player (filtered by interest range)
+                const nearbyOnLogin = getNearbyPlayers(playerState.x, playerState.z, 200);
+                const nearbyPlayersObj = {};
+                nearbyOnLogin.forEach(state => {
+                    if (state.socketId !== socket.id) {
+                        nearbyPlayersObj[state.socketId] = state.toNetworkPacket();
+                    }
+                });
+                socket.emit('currentPlayers', nearbyPlayersObj);
 
-                // Notify others about player coming online (or being new)
-                socket.broadcast.emit('playerCameOnline', {
+                // Notify nearby players about player coming online
+                notifyNearby(playerState.x, playerState.z, 'playerCameOnline', {
                     id: socket.id,
                     player: playerState.toNetworkPacket()
-                });
+                }, 200);
 
                 console.log(`[Server] ${user.username} logged in. Total players in world: ${players.size}`);
             } else {
@@ -595,6 +626,33 @@ io.on('connection', (socket) => {
         console.log(`[${socket.id}] Sent ${chunksToProcess.length} chunks (${generatedCount} generated, ${cachedCount} cached) in ${totalTime}ms`);
     });
 
+    // --- NEARBY PLAYERS (streaming on movement) ---
+    socket.on('getNearbyPlayersData', (data) => {
+        const { x, z, radius } = data;
+        const r = radius || 200;
+        const nearby = getNearbyPlayers(x, z, r);
+        const playersObj = {};
+        nearby.forEach(state => {
+            if (state.socketId !== socket.id) {
+                playersObj[state.socketId] = state.toNetworkPacket();
+            }
+        });
+        socket.emit('nearbyPlayers', playersObj);
+    });
+
+    // --- PLACED BLOCKS (streaming on movement) ---
+    socket.on('getPlacedBlocks', (data) => {
+        const { x, z, radius } = data;
+        const r = radius || 200;
+        const rSq = r * r;
+        const nearby = Object.values(global.placedBlocks || {}).filter(b => {
+            const dx = b.x - x;
+            const dz = b.z - z;
+            return (dx * dx + dz * dz) <= rSq;
+        });
+        socket.emit('nearbyBlocks', nearby);
+    });
+
     // --- WORLD ITEMS ---
     socket.on('getWorldItems', async (data) => {
         // Return items within range of player position
@@ -629,13 +687,15 @@ io.on('connection', (socket) => {
         const item = worldItems[itemId];
 
         if (item) {
-            // Remove from DB (if exists)
-            await db.removeWorldItem(itemId).catch(() => { });
-            // Remove from memory
+            // Remove from memory FIRST (sync) to prevent race condition
+            // Without this, two players can both enter `if (item)` before either deletes it
             delete worldItems[itemId];
 
-            // Notify nearby players
-            io.emit('itemPickedUp', { itemId, playerId: socket.id });
+            // Remove from DB (async, safe to do after memory delete)
+            await db.removeWorldItem(itemId).catch(() => { });
+
+            // Notify nearby players to remove the item visually
+            notifyNearby(item.x, item.z, 'itemPickedUp', { itemId, playerId: socket.id }, 200);
         }
     });
 
@@ -686,8 +746,8 @@ io.on('connection', (socket) => {
 
         console.log(`[Build] ${player.username} placed ${type} at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`);
 
-        // Broadcast to everyone (including placer)
-        io.emit('blockPlaced', block);
+        // Broadcast to nearby players (including placer)
+        notifyNearby(block.x, block.z, 'blockPlaced', block, 200);
 
         // Sync back the new inventory
         socket.emit('inventoryUpdate', { inventory: player.inventory });
@@ -723,8 +783,8 @@ io.on('connection', (socket) => {
                 // Remove from DB
                 await db.removePlacedBlock(id).catch(err => console.error('[DB] removePlacedBlock error:', err));
 
-                // Broadcast destruction
-                io.emit('blockBroken', { id });
+                // Broadcast destruction to nearby players
+                notifyNearby(block.x, block.z, 'blockBroken', { id }, 200);
 
                 // Spawn floating item for the broken block
                 const itemId = `drop_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -740,28 +800,28 @@ io.on('connection', (socket) => {
                 };
 
                 // Add to memory
-                global.worldItems = global.worldItems || {};
-                global.worldItems[itemId] = dropItem;
+                worldItems[itemId] = dropItem;
 
-                // Broadcast spawn
-                io.emit('itemSpawned', dropItem);
+                // Broadcast spawn to nearby players
+                notifyNearby(dropItem.x, dropItem.z, 'itemSpawned', dropItem, 200);
 
                 // Remove after 60s
                 setTimeout(() => {
-                    if (global.worldItems[itemId]) {
-                        delete global.worldItems[itemId];
-                        io.emit('itemDespawned', { itemId });
+                    if (worldItems[itemId]) {
+                        const despawnItem = worldItems[itemId];
+                        delete worldItems[itemId];
+                        notifyNearby(despawnItem.x, despawnItem.z, 'itemDespawned', { itemId }, 200);
                     }
                 }, 60000);
             } else {
                 // Block Damaged but not broken
-                io.emit('blockDamaged', {
+                notifyNearby(block.x, block.z, 'blockDamaged', {
                     id: id,
                     damage: damage,
                     currentHealth: block.health,
                     maxHealth: block.maxHealth,
                     attackerId: socket.id
-                });
+                }, 200);
             }
         }
     });
@@ -788,12 +848,18 @@ io.on('connection', (socket) => {
     // In-memory tree state (key: "x_z", value: { health, maxHealth, isCut })
 
     socket.on('damageTree', (data) => {
-        const { position, toolId, damage } = data;
+        const { position, toolId, damage, playerPos } = data;
 
         const player = players.get(socket.id);
         if (!player) return;
 
-        // Validate distance
+        // Update server-side player position from fresh client data
+        if (playerPos) {
+            player.x = playerPos.x;
+            player.z = playerPos.z;
+        }
+
+        // Validate distance (uses updated position)
         const dx = position.x - player.x;
         const dz = position.z - player.z;
         const distSq = dx * dx + dz * dz;
@@ -834,6 +900,7 @@ io.on('connection', (socket) => {
 
             io.emit('treeCut', {
                 position: position,
+                treeKey: treeKey,
                 attackerId: socket.id
             });
 
@@ -865,26 +932,22 @@ io.on('connection', (socket) => {
                 // Add to memory
                 worldItems[itemId] = item;
 
-                // Broadcast spawn
-                io.emit('itemSpawned', item);
+                // Broadcast spawn to nearby players
+                notifyNearby(item.x, item.z, 'itemSpawned', item, 200);
 
                 // Remove after 60s
                 setTimeout(() => {
                     if (worldItems[itemId]) {
+                        const despawnWood = worldItems[itemId];
                         delete worldItems[itemId];
-                        io.emit('itemDespawned', { itemId });
+                        if (despawnWood) notifyNearby(despawnWood.x, despawnWood.z, 'itemDespawned', { itemId }, 200);
                     }
                 }, 60000);
             }
 
         } else {
-            // Tree Damaged
-            io.emit('treeDamaged', {
-                position: position,
-                damage: damage,
-                currentHealth: tree.health,
-                attackerId: socket.id
-            });
+            // Tree damaged but not cut - server tracks silently, no broadcast needed
+            console.log(`[TreeDebug] Tree ${treeKey} damaged: ${tree.health}/${tree.maxHealth} HP remaining`);
         }
     });
 
@@ -956,17 +1019,12 @@ io.on('connection', (socket) => {
 
                 worldItems[itemId] = item;
 
-                io.emit('itemSpawned', item);
+                notifyNearby(item.x, item.z, 'itemSpawned', item, 200);
             }
 
         } else {
-            // Rock Damaged
-            io.emit('rockDamaged', {
-                position: position,
-                damage: damage,
-                currentHealth: rock.health,
-                attackerId: socket.id
-            });
+            // Rock damaged but not broken - server tracks silently
+            console.log(`[RockDebug] Rock ${rockKey} damaged: ${rock.health}/${rock.maxHealth} HP remaining`);
         }
     });
 
@@ -1103,10 +1161,11 @@ io.on('connection', (socket) => {
             db.savePlayerState(playerState.username, dbObj);
 
             // Notify clients that player went offline (but NOT removed - they stay visible)
-            io.emit('playerWentOffline', {
+            // Notify nearby clients that player went offline
+            notifyNearby(playerState.x, playerState.z, 'playerWentOffline', {
                 id: playerState.socketId,
                 username: playerState.username
-            });
+            }, 200);
             console.log(`[Server] Total players in world: ${players.size} (including offline)`);
         }
     });
@@ -1189,6 +1248,9 @@ initWorldItems().then(async () => {
     } catch (err) {
         console.error('[DB] Failed to load placed blocks:', err);
     }
+
+    // Load all offline players
+    await initPlayers();
 
     http.listen(3000, '0.0.0.0', () => {
         console.log('Battlefield server running on *:3000');

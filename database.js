@@ -114,6 +114,27 @@ const Database = {
         });
     },
 
+    getAllUsers: () => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT * FROM users`, [], (err, rows) => {
+                if (err) return reject(err);
+
+                rows.forEach(row => {
+                    try {
+                        row.inventory = JSON.parse(row.inventory);
+                        if (row.inventory && typeof row.inventory === 'object' && row.inventory.inventory && Array.isArray(row.inventory.inventory)) {
+                            row.inventory = row.inventory.inventory;
+                        }
+                    } catch (e) {
+                        row.inventory = [];
+                    }
+                });
+
+                resolve(rows);
+            });
+        });
+    },
+
     savePlayerState: (username, data) => {
         // data: PlayerState.toDBObject() result
         // Saves full player state on disconnect
