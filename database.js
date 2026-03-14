@@ -63,8 +63,16 @@ db.serialize(() => {
         x REAL,
         y REAL,
         z REAL,
-        rotation_y REAL DEFAULT 0
+        rotation_y REAL DEFAULT 0,
+        baseWidth REAL DEFAULT 0,
+        baseHeight REAL DEFAULT 0,
+        baseDepth REAL DEFAULT 0
     )`);
+
+    // Add base dimension columns if table already exists (migration)
+    db.run(`ALTER TABLE placed_blocks ADD COLUMN baseWidth REAL DEFAULT 0`, () => { });
+    db.run(`ALTER TABLE placed_blocks ADD COLUMN baseHeight REAL DEFAULT 0`, () => { });
+    db.run(`ALTER TABLE placed_blocks ADD COLUMN baseDepth REAL DEFAULT 0`, () => { });
 });
 
 const Database = {
@@ -167,8 +175,8 @@ const Database = {
     savePlacedBlock: (block) => {
         return new Promise((resolve, reject) => {
             db.run(
-                `INSERT OR REPLACE INTO placed_blocks (id, owner_id, type, x, y, z, rotation_y) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [block.id, block.owner_id, block.type, block.x, block.y, block.z, block.rotation_y || 0],
+                `INSERT OR REPLACE INTO placed_blocks (id, owner_id, type, x, y, z, rotation_y, baseWidth, baseHeight, baseDepth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [block.id, block.owner_id, block.type, block.x, block.y, block.z, block.rotation_y || 0, block.baseWidth || 0, block.baseHeight || 0, block.baseDepth || 0],
                 (err) => { if (err) reject(err); else resolve(); }
             );
         });

@@ -198,9 +198,9 @@ function getBiome(height, C, E, PV) {
 const BIOME_CONFIG = {
     ocean: { tree: 0, rock: 0, shrub: 0, types: [] },
     beach: { tree: 0, rock: 0.01, shrub: 0.02, types: [] },
-    plain: { tree: 0.005, rock: 0.002, shrub: 0.08, types: ['Tree', 'Tree2'] },
-    forest: { tree: 0.04, rock: 0.01, shrub: 0.12, types: ['Pine Tree', 'Tree', 'Big Tree'] },
-    jungle: { tree: 0.06, rock: 0.008, shrub: 0.15, types: ['Big Tree', 'Tree'] },
+    plain: { tree: 0.15, rock: 0.002, shrub: 0.08, types: ['Tree', 'Tree2'] },
+    forest: { tree: 0.18, rock: 0.01, shrub: 0.12, types: ['Pine Tree', 'Tree', 'Big Tree'] },
+    jungle: { tree: 0.16, rock: 0.008, shrub: 0.15, types: ['Big Tree', 'Tree'] },
     hill: { tree: 0.015, rock: 0.04, shrub: 0.05, types: ['Pine Tree'] },
     mountain: { tree: 0.005, rock: 0.08, shrub: 0.02, types: ['Pine Tree'] }
 };
